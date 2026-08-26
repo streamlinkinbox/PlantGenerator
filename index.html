@@ -37,29 +37,13 @@
 
         <div class="control-scroll">
           <section class="control-section first-section">
-            <div class="section-label"><span>01</span><h2>Base species</h2></div>
-            <div class="species-grid">
-              <button class="species-card active" data-species="oak">
-                <span class="species-icon oak-icon"><i></i><i></i><i></i></span>
-                <span><strong>Oak</strong><small>Broad canopy</small></span>
-                <em>⌁</em>
-              </button>
-              <button class="species-card" data-species="pine">
-                <span class="species-icon pine-icon"><i></i><i></i><i></i></span>
-                <span><strong>Pine</strong><small>Layered boughs</small></span>
-                <em>⌁</em>
-              </button>
-              <button class="species-card" data-species="willow">
-                <span class="species-icon willow-icon"><i></i><i></i><i></i></span>
-                <span><strong>Willow</strong><small>Soft cascade</small></span>
-                <em>⌁</em>
-              </button>
-              <button class="species-card" data-species="fern">
-                <span class="species-icon fern-icon"><i></i><i></i><i></i></span>
-                <span><strong>Fern</strong><small>Low rosette</small></span>
-                <em>⌁</em>
-              </button>
+            <div class="section-label"><span>01</span><h2>Species profile</h2><span class="fixed-pill">FIXED FOR THIS PASS</span></div>
+            <div class="oak-profile">
+              <span class="species-icon oak-icon"><i></i><i></i><i></i></span>
+              <div><strong>English oak <em>Quercus robur</em></strong><small>Broad, irregular crown · monopodial trunk</small></div>
+              <span class="profile-check">✓</span>
             </div>
+            <p class="profile-note">One species, one topology study. Controls below shape the same oak growth model without switching rules mid-pass.</p>
           </section>
 
           <section class="control-section">
@@ -129,13 +113,13 @@
       <section class="stage-panel">
         <div class="stage-toolbar">
           <div class="stage-title"><span class="live-dot"></span><span>PREVIEW / <strong id="stageSpecies">OAK CANOPY</strong></span></div>
-          <div class="stage-tools"><button id="pauseBtn" class="tool-button"><span class="pause-icon">Ⅱ</span><span id="pauseLabel">Pause</span></button><button id="frameBtn" class="tool-button">Frame <span>⌘F</span></button><button id="exportBtn" class="tool-button export-tool">Export <b>↓</b></button></div>
+          <div class="stage-tools"><button id="pauseBtn" class="tool-button"><span class="pause-icon">Ⅱ</span><span id="pauseLabel">Pause</span></button><button id="frameBtn" class="tool-button">Frame <span>Home / .</span></button><button id="topologyBtn" class="tool-button">Topology <span>W</span></button><button id="exportBtn" class="tool-button export-tool">Export <b>↓</b></button></div>
         </div>
         <div class="viewport" id="viewport">
           <canvas id="glCanvas" aria-label="Interactive generated plant preview"></canvas>
           <div class="viewport-grid"></div>
           <div class="axis-widget" aria-hidden="true"><span class="axis-y">Y</span><span class="axis-x">X</span><span class="axis-z">Z</span><i></i></div>
-          <div class="viewport-note"><span>DRAG TO ORBIT</span><i></i><span>SCROLL TO ZOOM</span></div>
+          <div class="viewport-note"><span>MMB ORBIT</span><i></i><span>SHIFT + MMB PAN</span><i></i><span>WHEEL ZOOM</span></div>
           <div class="preview-chip"><span class="chip-icon">✦</span><span><strong>PROCEDURAL</strong><small>Seed locked · repeatable</small></span></div>
           <div class="render-toast" id="renderToast">Specimen regenerated</div>
         </div>
@@ -152,18 +136,19 @@
         <div class="info-heading"><p class="eyebrow">SPECIMEN DATA</p><div class="code-label"><span class="status-dot"></span><span id="codeLabel">PF-OAK-482106</span></div></div>
         <div class="info-hero"><div class="ring-graphic"><div class="ring ring-one"></div><div class="ring ring-two"></div><div class="ring-core"></div><span>01</span></div><div><small>GENERATION</small><strong id="generationTime">0.018 s</strong><p>deterministic pass</p></div></div>
         <div class="data-list">
-          <div class="data-row"><span>Algorithm</span><strong>Recursive L-system <em>v2.4</em></strong></div>
-          <div class="data-row"><span>Geometry</span><strong>Instanced mesh</strong></div>
+          <div class="data-row"><span>Algorithm</span><strong>Oak pipe growth <em>v0.3</em></strong></div>
+          <div class="data-row"><span>Geometry</span><strong>Unified pipe skin</strong></div>
+          <div class="data-row"><span>Topology</span><strong><i class="green-check">✓</i> Welded Y / N junctions</strong></div>
           <div class="data-row"><span>Leaf shader</span><strong><i class="green-check">✓</i> Atlas sampled</strong></div>
           <div class="data-row"><span>Simulation</span><strong><i class="green-check">✓</i> GPU deterministic</strong></div>
         </div>
         <div class="palette-section"><div class="palette-heading"><span>Color palette</span><small id="paletteName">MOSS / BARK</small></div><div class="palette"><i style="background:#21382e"></i><i style="background:#52795a"></i><i style="background:#a9c889"></i><i style="background:#d9bb70"></i><i style="background:#503c2d"></i></div></div>
-        <div class="notes-card"><div class="note-title"><span>✦</span> <strong>ABOUT THIS PASS</strong></div><p>This preview keeps the plant on the GPU: branches are instanced once, while wind and falling leaves are evaluated in the vertex shader.</p><a href="#" id="learnLink">Read the rendering notes <span>↗</span></a></div>
-        <div class="shortcut-list"><div><span>G</span> Generate</div><div><span>Space</span> Pause motion</div><div><span>R</span> Randomize</div></div>
+        <div class="notes-card"><div class="note-title"><span>✦</span> <strong>ABOUT THIS PASS</strong></div><p>This pass grows a single oak skeleton, welds it into one pipe-skin mesh, then evaluates wind and anchored falling leaves in the GPU vertex shader.</p><a href="#" id="learnLink">Read the rendering notes <span>↗</span></a></div>
+        <div class="shortcut-list"><div><span>G</span> Generate</div><div><span>Space</span> Pause motion</div><div><span>W</span> Topology</div><div><span>R</span> Randomize</div></div>
       </aside>
     </main>
   </div>
-  <div class="modal hidden" id="helpModal"><div class="modal-card"><button class="modal-close" id="closeHelp">×</button><p class="eyebrow">HOW IT WORKS</p><h2>A small, repeatable ecosystem.</h2><p>PlantForge grows a seeded branch skeleton on each pass, then sends leaf transforms to WebGL instancing. Falling leaves never travel through JavaScript: a deterministic phase, wind vector, and gravity are evaluated per particle in the GPU vertex shader.</p><div class="modal-points"><span><b>01</b> Choose a species and growth rules.</span><span><b>02</b> Pick or import a four-tile atlas.</span><span><b>03</b> Drag the viewport to explore your specimen.</span></div><button class="primary-button" id="doneHelp">Got it <b>↗</b></button></div></div>
+  <div class="modal hidden" id="helpModal"><div class="modal-card"><button class="modal-close" id="closeHelp">×</button><p class="eyebrow">HOW IT WORKS</p><h2>One connected, repeatable tree.</h2><p>PlantForge grows one seeded English oak from a pipe-network skeleton, then skins the limbs into one connected branch mesh. Falling leaves are anchored to generated branch tips; only their deterministic wind and gravity motion is evaluated in the GPU vertex shader.</p><div class="modal-points"><span><b>01</b> Tune growth rules for one oak species.</span><span><b>02</b> Pick or import a four-tile atlas.</span><span><b>03</b> Use Blender-style MMB navigation in the viewport.</span></div><button class="primary-button" id="doneHelp">Got it <b>↗</b></button></div></div>
   <div class="sr-only" aria-live="polite" id="liveRegion"></div>
   <script src="app.js"></script>
 </body>

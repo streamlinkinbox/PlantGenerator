@@ -12,22 +12,19 @@
     height: $('#height'), branching: $('#branching'), density: $('#leafDensity'), seed: $('#seed'), wind: $('#wind'),
     heightValue: $('#heightValue'), branchingValue: $('#branchingValue'), densityValue: $('#leafDensityValue'), seedValue: $('#seedValue'), windValue: $('#windValue'),
     atlas: $('#atlasSelect'), atlasName: $('#atlasName'), upload: $('#uploadAtlas'), download: $('#downloadAtlas'),
-    falling: $('#fallingLeaves'), generate: $('#generateBtn'), randomize: $('#randomizeBtn'), reset: $('#resetBtn'), pause: $('#pauseBtn'), pauseLabel: $('#pauseLabel'), frame: $('#frameBtn'), export: $('#exportBtn'),
+    falling: $('#fallingLeaves'), generate: $('#generateBtn'), randomize: $('#randomizeBtn'), reset: $('#resetBtn'), pause: $('#pauseBtn'), pauseLabel: $('#pauseLabel'), frame: $('#frameBtn'), topology: $('#topologyBtn'), export: $('#exportBtn'),
     stageSpecies: $('#stageSpecies'), branchCount: $('#branchCount'), leafCount: $('#leafCount'), particleCount: $('#particleCount'), frameTime: $('#frameTime'), code: $('#codeLabel'), generationTime: $('#generationTime'), paletteName: $('#paletteName'), toast: $('#renderToast'), live: $('#liveRegion'),
     help: $('#helpBtn'), helpModal: $('#helpModal'), closeHelp: $('#closeHelp'), doneHelp: $('#doneHelp'), learn: $('#learnLink'), direction: $('#windDirectionValue'), strength: $('#windStrengthValue')
   };
 
   const defaults = { species: 'oak', height: 7.4, branching: 64, density: 78, seed: 482106, wind: 38, atlas: 'botanical', falling: true };
   const speciesInfo = {
-    oak: { label: 'Oak', stage: 'OAK CANOPY', code: 'OAK', palette: 'MOSS / BARK', maxDepth: 4, baseChildren: 2, spread: .52, taper: .72, leafBase: 22, colors: ['#354d35', '#527b54', '#80a765', '#a9c47b'] },
-    pine: { label: 'Pine', stage: 'PINE LAYER', code: 'PINE', palette: 'PINE / NEEDLE', maxDepth: 5, baseChildren: 2, spread: .31, taper: .78, leafBase: 15, colors: ['#1f493c', '#2c6850', '#477e57', '#6f9a61'] },
-    willow: { label: 'Willow', stage: 'WILLOW CASCADE', code: 'WILLOW', palette: 'MOSS / GOLD', maxDepth: 4, baseChildren: 3, spread: .72, taper: .68, leafBase: 19, colors: ['#4b6f4d', '#6e9560', '#a6b96b', '#c8ba70'] },
-    fern: { label: 'Fern', stage: 'FERN ROSETTE', code: 'FERN', palette: 'FROND / SOIL', maxDepth: 3, baseChildren: 4, spread: .85, taper: .56, leafBase: 13, colors: ['#2c5a3e', '#428057', '#73a466', '#a4c479'] }
+    oak: { label: 'English oak', stage: 'ENGLISH OAK', code: 'OAK', palette: 'MOSS / BARK', maxDepth: 4, baseChildren: 2, spread: .52, taper: .72, colors: ['#354d35', '#527b54', '#80a765', '#a9c47b'] }
   };
 
   const state = {
     species: defaults.species, atlas: defaults.atlas, generated: null, paused: false, time: 0, lastFrame: performance.now(),
-    camera: { yaw: .47, pitch: .06, distance: 11.3 }, dragging: false, pointerX: 0, pointerY: 0, customAtlas: null, gl: null, renderer: null
+    camera: { yaw: .47, pitch: .06, distance: 11.3, panX: 0, panY: 0 }, showTopology: false, dragging: false, navMode: null, pointerX: 0, pointerY: 0, customAtlas: null, gl: null, renderer: null
   };
 
   // A deterministic, very small PRNG keeps the same seed visually identical.
@@ -54,24 +51,83 @@
     return [parseInt(value.slice(0, 2), 16) / 255, parseInt(value.slice(2, 4), 16) / 255, parseInt(value.slice(4, 6), 16) / 255];
   }
 
-  // Builds a low-poly bark tube between two 3D points.
-  function cylinderMesh(a, b, radiusA, radiusB, colorA, colorB, sides = 7) {
-    const vertices = [], indices = [];
-    const axis = norm([b[0] - a[0], b[1] - a[1], b[2] - a[2]]);
-    let ref = Math.abs(axis[1]) > .85 ? [1, 0, 0] : [0, 1, 0];
-    let u = norm([axis[1] * ref[2] - axis[2] * ref[1], axis[2] * ref[0] - axis[0] * ref[2], axis[0] * ref[1] - axis[1] * ref[0]]);
-    let v = [axis[1] * u[2] - axis[2] * u[1], axis[2] * u[0] - axis[0] * u[2], axis[0] * u[1] - axis[1] * u[0]];
-    for (let ring = 0; ring < 2; ring++) {
-      const center = ring ? b : a, radius = ring ? radiusB : radiusA, color = ring ? colorB : colorA;
-      for (let side = 0; side < sides; side++) {
-        const theta = (side / sides) * Math.PI * 2;
-        const radial = add(scale(u, Math.cos(theta) * radius), scale(v, Math.sin(theta) * radius));
-        vertices.push(center[0] + radial[0], center[1] + radial[1], center[2] + radial[2], color[0], color[1], color[2]);
+  // A surface-net skin turns the overlapping branch centerlines into one
+  // welded mesh. Unlike drawing a cylinder per segment, every Y/N junction is
+  // resolved by the signed-distance field and shares the resulting topology.
+  // The dual grid gives us mostly quad-like flow, triangulated only for GL.
+  function pipeSkinMesh(segments, bark, barkLight) {
+    if (!segments.length) return { vertices: [], indices: [] };
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity, maxRadius = 0;
+    segments.forEach(segment => {
+      [segment.a, segment.b].forEach(point => {
+        minX = Math.min(minX, point[0]); maxX = Math.max(maxX, point[0]);
+        minY = Math.min(minY, point[1]); maxY = Math.max(maxY, point[1]);
+        minZ = Math.min(minZ, point[2]); maxZ = Math.max(maxZ, point[2]);
+      });
+      maxRadius = Math.max(maxRadius, segment.r1, segment.r2);
+    });
+    const margin = Math.max(.2, maxRadius * 1.45), nx = 44, ny = 88, nz = 44;
+    minX -= margin; maxX += margin; minY = Math.min(-margin, minY - margin); maxY += margin; minZ -= margin; maxZ += margin;
+    const stepX = (maxX - minX) / (nx - 1), stepY = (maxY - minY) / (ny - 1), stepZ = (maxZ - minZ) / (nz - 1);
+    const grid = new Float32Array(nx * ny * nz);
+    const gridIndex = (x, y, z) => x + nx * (y + ny * z);
+    const fieldAt = (x, y, z) => {
+      let field = Infinity;
+      for (const segment of segments) {
+        const ax = segment.a[0], ay = segment.a[1], az = segment.a[2];
+        const vx = segment.b[0] - ax, vy = segment.b[1] - ay, vz = segment.b[2] - az;
+        const lengthSq = vx * vx + vy * vy + vz * vz || 1;
+        const t = clamp(((x - ax) * vx + (y - ay) * vy + (z - az) * vz) / lengthSq, 0, 1);
+        const dx = x - (ax + vx * t), dy = y - (ay + vy * t), dz = z - (az + vz * t);
+        const radius = mix(segment.r1, segment.r2, t) * 1.18;
+        const distance = Math.hypot(dx, dy, dz) - radius;
+        // Smooth union rounds the crotch of overlapping pipes, giving a
+        // natural branch collar instead of a hard boolean crease.
+        if (field === Infinity) field = distance;
+        else { const k = .12; const h = Math.max(k - Math.abs(field - distance), 0); field = Math.min(field, distance) - h * h / (4 * k); }
       }
+      return field;
+    };
+    for (let z = 0; z < nz; z++) for (let y = 0; y < ny; y++) for (let x = 0; x < nx; x++) grid[gridIndex(x, y, z)] = fieldAt(minX + x * stepX, minY + y * stepY, minZ + z * stepZ);
+
+    const cellX = nx - 1, cellY = ny - 1, cellZ = nz - 1;
+    const cellIndex = (x, y, z) => x + cellX * (y + cellY * z);
+    const cellVertices = new Int32Array(cellX * cellY * cellZ); cellVertices.fill(-1);
+    const vertices = [], cornerOffsets = [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]];
+    const edgeCorners = [[0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6], [6, 7], [7, 4], [0, 4], [1, 5], [2, 6], [3, 7]];
+    const materialColor = (px, py, pz) => {
+      const shade = clamp(.86 + Math.sin(px * 3.7 + pz * 4.1) * .055 + Math.sin(py * 7.0) * .025, .7, 1.02);
+      return [clamp(mix(bark[0], barkLight[0], clamp(py / Math.max(maxY, .01), 0, 1) * .3) * shade, 0, 1), clamp(mix(bark[1], barkLight[1], clamp(py / Math.max(maxY, .01), 0, 1) * .3) * shade, 0, 1), clamp(mix(bark[2], barkLight[2], clamp(py / Math.max(maxY, .01), 0, 1) * .3) * shade, 0, 1)];
+    };
+    for (let z = 0; z < cellZ; z++) for (let y = 0; y < cellY; y++) for (let x = 0; x < cellX; x++) {
+      const values = cornerOffsets.map(o => grid[gridIndex(x + o[0], y + o[1], z + o[2])]);
+      const hasInside = values.some(value => value < 0), hasOutside = values.some(value => value >= 0);
+      if (!hasInside || !hasOutside) continue;
+      let px = 0, py = 0, pz = 0, intersections = 0;
+      edgeCorners.forEach(([a, b]) => {
+        if ((values[a] < 0) === (values[b] < 0)) return;
+        const va = values[a], vb = values[b], t = clamp(va / (va - vb), 0, 1), ca = cornerOffsets[a], cb = cornerOffsets[b];
+        px += minX + (x + mix(ca[0], cb[0], t)) * stepX; py += minY + (y + mix(ca[1], cb[1], t)) * stepY; pz += minZ + (z + mix(ca[2], cb[2], t)) * stepZ; intersections++;
+      });
+      if (!intersections) continue;
+      px /= intersections; py /= intersections; pz /= intersections;
+      const index = vertices.length / 6, color = materialColor(px, py, pz);
+      vertices.push(px, py, pz, color[0], color[1], color[2]); cellVertices[cellIndex(x, y, z)] = index;
     }
-    for (let side = 0; side < sides; side++) {
-      const next = (side + 1) % sides, a0 = side, a1 = next, b0 = sides + side, b1 = sides + next;
-      indices.push(a0, b0, a1, a1, b0, b1);
+    const indices = [];
+    const addQuad = (a, b, c, d) => { if (a < 0 || b < 0 || c < 0 || d < 0) return; indices.push(a, b, c, a, c, d); };
+    // Each sign-changing primal edge gets one quad between its four dual cells.
+    for (let z = 1; z < nz - 1; z++) for (let y = 1; y < ny - 1; y++) for (let x = 0; x < nx - 1; x++) {
+      if ((grid[gridIndex(x, y, z)] < 0) === (grid[gridIndex(x + 1, y, z)] < 0)) continue;
+      addQuad(cellVertices[cellIndex(x, y - 1, z - 1)], cellVertices[cellIndex(x, y, z - 1)], cellVertices[cellIndex(x, y, z)], cellVertices[cellIndex(x, y - 1, z)]);
+    }
+    for (let z = 1; z < nz - 1; z++) for (let y = 0; y < ny - 1; y++) for (let x = 1; x < nx - 1; x++) {
+      if ((grid[gridIndex(x, y, z)] < 0) === (grid[gridIndex(x, y + 1, z)] < 0)) continue;
+      addQuad(cellVertices[cellIndex(x - 1, y, z - 1)], cellVertices[cellIndex(x, y, z - 1)], cellVertices[cellIndex(x, y, z)], cellVertices[cellIndex(x - 1, y, z)]);
+    }
+    for (let z = 0; z < nz - 1; z++) for (let y = 1; y < ny - 1; y++) for (let x = 1; x < nx - 1; x++) {
+      if ((grid[gridIndex(x, y, z)] < 0) === (grid[gridIndex(x, y, z + 1)] < 0)) continue;
+      addQuad(cellVertices[cellIndex(x - 1, y - 1, z)], cellVertices[cellIndex(x, y - 1, z)], cellVertices[cellIndex(x, y, z)], cellVertices[cellIndex(x - 1, y, z)]);
     }
     return { vertices, indices };
   }
@@ -82,85 +138,83 @@
     const height = Number(els.height.value), branching = Number(els.branching.value), density = Number(els.density.value);
     const random = rngFactory(Number(els.seed.value));
     const segments = [], leaves = [], tips = [];
-    const bark = hexRgb(state.species === 'pine' ? '#392d23' : state.species === 'fern' ? '#493a2b' : '#4b3527');
-    const barkLight = hexRgb(state.species === 'willow' ? '#876342' : '#75513a');
+    const bark = hexRgb('#4b3527');
+    const barkLight = hexRgb('#75513a');
     const leafColors = species.colors.map(hexRgb);
     const depthMax = species.maxDepth;
 
+    // English oak rule set: a persistent central leader, wide lower limbs,
+    // shorter upper forks, taper at every order, and near-conserved pipe area.
+    // A fork has one leader + side limbs; child radii follow r_child ~=
+    // r_parent / sqrt(number of outgoing pipes), rather than arbitrary cones.
     const addBranch = (start, direction, length, radius, depth, forkBias = 0) => {
-      const bend = [
-        (random() - .5) * species.spread * .24,
-        (random() - .35) * .12,
-        (random() - .5) * species.spread * .24
-      ];
+      const bend = [(random() - .5) * species.spread * .24, (random() - .35) * .12, (random() - .5) * species.spread * .24];
       const nextDirection = norm(add(direction, bend));
       const end = add(start, scale(nextDirection, length));
+      const endRadius = Math.max(.009, radius * species.taper);
       const c1 = bark.map((v, i) => v * (1 + (random() - .5) * .08) + (i === 0 ? .015 : 0));
       const c2 = barkLight.map((v, i) => v * (1 + (random() - .5) * .08));
-      segments.push({ a: start, b: end, r1: radius, r2: Math.max(.008, radius * species.taper), c1, c2, depth });
+      segments.push({ a: start, b: end, r1: radius, r2: endRadius, c1, c2, depth });
 
-      if (depth <= 0 || segments.length > 540) {
-        tips.push({ point: end, direction: nextDirection, depth });
-        return;
+      if (depth <= 0 || segments.length > 540) { tips.push({ point: end, direction: nextDirection, depth }); return; }
+      const heightRatio = clamp(end[1] / Math.max(height, .01), 0, 1);
+      let sideChildren = species.baseChildren + (branching > 72 && depth > 1 ? 1 : 0) - (branching < 38 && depth > 1 ? 1 : 0);
+      sideChildren = clamp(sideChildren, 1, 3);
+      if (random() > .18 + branching / 190 && depth > 1) sideChildren = Math.max(1, sideChildren - 1);
+      const outgoingPipes = sideChildren + 1; // leader + side branches; Pipe Model-inspired.
+      const childRadius = endRadius * .91 / Math.sqrt(outgoingPipes);
+
+      // Keep the monopodial leader alive through the crown. Its small drift is
+      // deterministic and gives an oak its irregular, not perfectly radial, top.
+      const leaderDirection = norm(add(nextDirection, [(random() - .5) * .16, .09 + random() * .08, (random() - .5) * .16]));
+      addBranch(end, leaderDirection, length * (.65 + random() * .08), childRadius * 1.05, depth - 1, forkBias + .45);
+
+      // Oaks place substantial limbs through the lower two-thirds of the trunk;
+      // younger orders progressively start closer to the shoot tip.
+      for (let i = 0; i < sideChildren; i++) {
+        const lowerCrownT = depth === depthMax ? mix(.16, .72, random()) : mix(.48, .88, random());
+        const branchStart = lerpVec(start, end, lowerCrownT);
+        const theta = (i / sideChildren) * Math.PI * 2 + random() * 1.15 + forkBias;
+        const lateral = species.spread * (0.48 + random() * .42) * (1.16 - heightRatio * .3);
+        const childDirection = norm([Math.cos(theta) * lateral, .36 + random() * .6 + heightRatio * .28, Math.sin(theta) * lateral]);
+        addBranch(branchStart, childDirection, length * (.54 + random() * .1), childRadius * (.9 + random() * .13), depth - 1, theta * .17);
       }
-      const heightRatio = end[1] / Math.max(height, .01);
-      let children = species.baseChildren + (branching > 72 && depth > 1 ? 1 : 0) - (branching < 38 && depth > 1 ? 1 : 0);
-      if (species === speciesInfo.fern) children = depth === depthMax ? 3 : 2;
-      children = clamp(children, 1, 4);
-      if (random() > .22 + branching / 160 && depth > 1) children = Math.max(1, children - 1);
-      for (let i = 0; i < children; i++) {
-        const t = species === speciesInfo.willow ? mix(.58, .92, random()) : mix(.72, .98, random());
-        const branchStart = lerpVec(start, end, t);
-        const theta = (i / children) * Math.PI * 2 + random() * 1.2 + forkBias;
-        const lateral = species.spread * (0.42 + random() * .45) * (1.05 - heightRatio * .22);
-        let childDirection = norm([Math.cos(theta) * lateral, .76 + random() * .45, Math.sin(theta) * lateral]);
-        if (state.species === 'pine') childDirection = norm([Math.cos(theta) * lateral, 1.1 + random() * .34, Math.sin(theta) * lateral]);
-        if (state.species === 'willow') childDirection = norm([Math.cos(theta) * lateral * .9, .48 + random() * .3, Math.sin(theta) * lateral * .9]);
-        if (state.species === 'fern') childDirection = norm([Math.cos(theta) * (1.2 + random() * .45), .55 + random() * .55, Math.sin(theta) * (1.2 + random() * .45)]);
-        addBranch(branchStart, childDirection, length * (state.species === 'fern' ? .66 : .61 + random() * .08), radius * (.57 + random() * .1), depth - 1, theta * .17);
-      }
-      if (depth === depthMax) tips.push({ point: end, direction: nextDirection, depth });
     };
 
-    const trunkDir = state.species === 'fern' ? [0, 1, 0] : [0, 1, 0];
-    if (state.species === 'fern') {
-      // Ferns start as a radial set of fronds rather than a single woody trunk.
-      const fronds = 7 + Math.round(branching / 25);
-      for (let i = 0; i < fronds; i++) {
-        const theta = i / fronds * Math.PI * 2 + random() * .4;
-        addBranch([0, .03, 0], norm([Math.cos(theta) * 1.5, .5 + random() * .3, Math.sin(theta) * 1.5]), height * .2, .075, depthMax, theta);
-      }
-    } else {
-      addBranch([0, 0, 0], trunkDir, height * .30, .25, depthMax, random() * 2);
-      addBranch([0, height * .20, 0], norm([.05 + random() * .08, 1, .04 + random() * .08]), height * .16, .21, depthMax - 1, random() * 2);
-    }
+    // Start with one continuous trunk/leader. All other centerlines originate
+    // on it or on a child, so the pipe skin below can produce real junctions.
+    addBranch([0, 0, 0], [0, 1, 0], height * .31, .31, depthMax, random() * 2);
 
     // Add a crown of atlas-sampled leaf instances at every branch end. This is
     // intentionally CPU-side only at generation time; motion is GPU-side.
     const densityFactor = density / 100;
-    const perTip = state.species === 'pine' ? 15 : state.species === 'fern' ? 11 : state.species === 'willow' ? 18 : 21;
+    const perTip = 21;
     for (const tip of tips) {
       const count = Math.max(2, Math.round(perTip * densityFactor * (.8 + random() * .45)));
       for (let i = 0; i < count; i++) {
         const around = random() * Math.PI * 2;
-        const radial = (state.species === 'pine' ? .16 : .26) * Math.sqrt(random());
-        const vertical = (random() - .3) * (state.species === 'willow' ? .62 : .38);
+        const radial = .26 * Math.sqrt(random());
+        const vertical = (random() - .3) * .38;
         const point = add(tip.point, [Math.cos(around) * radial, vertical, Math.sin(around) * radial]);
-        const size = (state.species === 'fern' ? .11 : .14) * (.72 + random() * .52) * (state.species === 'pine' ? .78 : 1);
+        const size = .14 * (.72 + random() * .52);
         leaves.push({ position: point, size, angle: random() * Math.PI * 2, cell: Math.floor(random() * 4), seed: random(), tint: leafColors[Math.floor(random() * leafColors.length)] });
       }
     }
 
-    // A separate, stable pool is passed to the falling-leaf shader. Its values
-    // never change after generation, so replaying a seed replays the same wind.
-    const fallingCount = state.species === 'fern' ? 90 : 180;
-    const falling = [];
-    for (let i = 0; i < fallingCount; i++) {
-      const source = leaves[Math.floor(random() * Math.max(1, leaves.length))] || { position: [0, height, 0] };
-      falling.push({ position: [source.position[0] + (random() - .5) * 1.2, Math.max(.4, source.position[1] - random() * height * .1), source.position[2] + (random() - .5) * 1.2], size: .065 + random() * .065, angle: random() * Math.PI * 2, cell: Math.floor(random() * 4), seed: random(), tint: leafColors[Math.floor(random() * leafColors.length)] });
-    }
+    // Falling instances are sampled from the real generated leaf attachments.
+    // No free-floating emission volume is used: at t=0 every particle is at a
+    // leaf's actual branch tip, then the GPU shader detaches it and lets it fall.
+    // The sampled leaves are removed from the static canopy so a falling leaf
+    // leaves a visible gap instead of looking like a second particle spawned in.
+    const orderedLeaves = leaves.map((leaf, index) => ({ leaf, index }));
+    for (let i = orderedLeaves.length - 1; i > 0; i--) { const j = Math.floor(random() * (i + 1)); [orderedLeaves[i], orderedLeaves[j]] = [orderedLeaves[j], orderedLeaves[i]]; }
+    const fallingTotal = Math.min(180, Math.max(12, Math.round(orderedLeaves.length * .24)), Math.max(0, orderedLeaves.length - 12));
+    const selectedFalling = orderedLeaves.slice(0, fallingTotal);
+    const falling = selectedFalling.map(({ leaf }) => ({ position: [...leaf.position], size: .065 + random() * .065, angle: random() * Math.PI * 2, cell: Math.floor(random() * 4), seed: random(), tint: leafColors[Math.floor(random() * leafColors.length)] }));
+    const fallingIndexes = new Set(selectedFalling.map(({ index }) => index));
+    const groundedLeaves = leaves.filter((leaf, index) => !fallingIndexes.has(index));
 
-    state.generated = { segments, leaves, falling, height, duration: performance.now() - started };
+    state.generated = { segments, leaves: groundedLeaves, falling, height, bark, barkLight, duration: performance.now() - started };
     updateStats();
     if (state.renderer) state.renderer.upload(state.generated);
     showToast('Specimen regenerated');
@@ -227,12 +281,15 @@
     uniform mat4 u_projection;
     uniform mat4 u_view;
     out vec3 v_color;
-    void main() { v_color = a_color; gl_Position = u_projection * u_view * vec4(a_position, 1.0); }`;
+    out vec3 v_position;
+    void main() { v_color = a_color; v_position = a_position; gl_Position = u_projection * u_view * vec4(a_position, 1.0); }`;
   const branchFragment = `#version 300 es
     precision highp float;
     in vec3 v_color;
+    in vec3 v_position;
+    uniform float u_wire;
     out vec4 outColor;
-    void main() { outColor = vec4(v_color, 1.0); }`;
+    void main() { vec3 color; if (u_wire > .5) color = vec3(.66, .9, .42); else { vec3 normal = normalize(cross(dFdx(v_position), dFdy(v_position))); float light = .62 + .38 * abs(dot(normal, normalize(vec3(-.42, .82, .36)))); color = v_color * light; } outColor = vec4(color, mix(1.0, .78, u_wire)); }`;
   const leafVertex = `#version 300 es
     layout(location=0) in vec2 a_corner;
     layout(location=1) in vec3 a_offset;
@@ -260,8 +317,10 @@
       world.z += cos(u_time * .86 + phase) * (.012 + a_size * .07) * u_wind;
       if (u_falling > .5) {
         float cycle = max(4.0, u_height * .82);
-        float fall = mod(u_time * (.23 + a_seed * .27) + a_seed * cycle, cycle);
-        world.y = a_offset.y + .6 - fall;
+        // a_offset is the actual leaf's branch attachment point. The loop
+        // begins there, so every detached leaf visibly starts on a branch.
+        float fall = mod(u_time * (.23 + a_seed * .27), cycle);
+        world.y = a_offset.y - fall;
         world.x += sin(u_time * (.75 + a_seed) + phase) * (.12 + u_wind * .18);
         world.z += cos(u_time * (.58 + a_seed) + phase) * (.08 + u_wind * .13);
         world.x += u_wind * fall * .12;
@@ -340,12 +399,10 @@
     gl.bindVertexArray(null);
 
     renderer.upload = (data) => {
-      const branchData = [], indexData = [];
-      data.segments.forEach(segment => {
-        const mesh = cylinderMesh(segment.a, segment.b, segment.r1, segment.r2, segment.c1, segment.c2);
-        const offset = branchData.length / 6;
-        branchData.push(...mesh.vertices); indexData.push(...mesh.indices.map(index => index + offset));
-      });
+      // One signed-distance surface for the full skeleton: no object-per-branch
+      // seams, no overlapping caps, and actual shared topology at junctions.
+      const mesh = pipeSkinMesh(data.segments, data.bark, data.barkLight);
+      const branchData = mesh.vertices, indexData = mesh.indices;
       gl.bindVertexArray(renderer.branchVao);
       gl.bindBuffer(gl.ARRAY_BUFFER, renderer.branchBuffer); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(branchData), gl.STATIC_DRAW);
       gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 24, 0);
@@ -371,12 +428,13 @@
       renderer.resize();
       const width = els.canvas.width, height = els.canvas.height; gl.viewport(0, 0, width, height); gl.clearColor(0, 0, 0, 0); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
       if (!state.generated) return;
-      const target = [0, state.generated.height * .43, 0], pitch = state.camera.pitch, dist = state.camera.distance;
-      const eye = [Math.sin(state.camera.yaw) * dist * Math.cos(pitch), target[1] + Math.sin(pitch) * dist, Math.cos(state.camera.yaw) * dist * Math.cos(pitch)];
+      const target = [state.camera.panX, state.generated.height * .43 + state.camera.panY, 0], pitch = state.camera.pitch, dist = state.camera.distance;
+      const eye = [target[0] + Math.sin(state.camera.yaw) * dist * Math.cos(pitch), target[1] + Math.sin(pitch) * dist, target[2] + Math.cos(state.camera.yaw) * dist * Math.cos(pitch)];
       const camera = lookAt(eye, target), projection = perspective(Math.PI / 4.3, width / height, .05, 80);
       const wind = Number(els.wind.value) / 100;
       gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.disable(gl.CULL_FACE); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-      gl.useProgram(branchProgram); gl.uniformMatrix4fv(gl.getUniformLocation(branchProgram, 'u_projection'), false, projection); gl.uniformMatrix4fv(gl.getUniformLocation(branchProgram, 'u_view'), false, camera.matrix); gl.bindVertexArray(renderer.branchVao); gl.drawElements(gl.TRIANGLES, renderer.branchIndexCount, gl.UNSIGNED_INT, 0);
+      gl.useProgram(branchProgram); gl.uniformMatrix4fv(gl.getUniformLocation(branchProgram, 'u_projection'), false, projection); gl.uniformMatrix4fv(gl.getUniformLocation(branchProgram, 'u_view'), false, camera.matrix); gl.uniform1f(gl.getUniformLocation(branchProgram, 'u_wire'), 0); gl.bindVertexArray(renderer.branchVao); gl.drawElements(gl.TRIANGLES, renderer.branchIndexCount, gl.UNSIGNED_INT, 0);
+      if (state.showTopology) { gl.uniform1f(gl.getUniformLocation(branchProgram, 'u_wire'), 1); gl.depthMask(false); gl.drawElements(gl.LINES, renderer.branchIndexCount, gl.UNSIGNED_INT, 0); gl.depthMask(true); }
       gl.useProgram(leafProgram); gl.uniformMatrix4fv(gl.getUniformLocation(leafProgram, 'u_projection'), false, projection); gl.uniformMatrix4fv(gl.getUniformLocation(leafProgram, 'u_view'), false, camera.matrix); gl.uniform3fv(gl.getUniformLocation(leafProgram, 'u_camRight'), camera.right); gl.uniform3fv(gl.getUniformLocation(leafProgram, 'u_camUp'), camera.up); gl.uniform1f(gl.getUniformLocation(leafProgram, 'u_time'), time); gl.uniform1f(gl.getUniformLocation(leafProgram, 'u_wind'), wind); gl.uniform1f(gl.getUniformLocation(leafProgram, 'u_height'), state.generated.height); gl.uniform1f(gl.getUniformLocation(leafProgram, 'u_falling'), 0); gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, renderer.texture); gl.uniform1i(gl.getUniformLocation(leafProgram, 'u_atlas'), 0); gl.depthMask(false); gl.bindVertexArray(renderer.leafVao); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, renderer.leafCount);
       if (els.falling.checked && renderer.fallingCount) { gl.uniform1f(gl.getUniformLocation(leafProgram, 'u_falling'), 1); gl.bindVertexArray(renderer.fallingVao); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, renderer.fallingCount); }
       gl.depthMask(true); gl.bindVertexArray(null);
@@ -420,16 +478,43 @@
   els.randomize.addEventListener('click', () => { els.seed.value = Math.floor(Math.random() * 999998) + 1; updateControls(); generatePlant(); });
   els.reset.addEventListener('click', () => { state.species = defaults.species; els.species.forEach(card => card.classList.toggle('active', card.dataset.species === defaults.species)); Object.entries(defaults).forEach(([key, value]) => { const input = els[key]; if (input && input.type === 'checkbox') input.checked = value; else if (input) input.value = value; }); state.atlas = defaults.atlas; state.customAtlas = null; els.atlasName.textContent = 'BOTANICAL ATLAS'; drawAtlas(state.atlas); updateControls(); generatePlant(); showToast('Controls reset'); });
   els.pause.addEventListener('click', () => { state.paused = !state.paused; els.pauseLabel.textContent = state.paused ? 'Resume' : 'Pause'; els.pause.querySelector('.pause-icon').textContent = state.paused ? '▶' : 'Ⅱ'; });
-  els.frame.addEventListener('click', () => { state.camera.yaw = .47; state.camera.pitch = .06; state.camera.distance = Math.max(10.5, Number(els.height.value) * 1.33); showToast('Camera framed'); });
+  els.frame.addEventListener('click', () => { state.camera.yaw = .47; state.camera.pitch = .06; state.camera.distance = Math.max(10.5, Number(els.height.value) * 1.33); state.camera.panX = 0; state.camera.panY = 0; showToast('Camera framed'); });
+  els.topology.addEventListener('click', () => { state.showTopology = !state.showTopology; els.topology.classList.toggle('active', state.showTopology); showToast(state.showTopology ? 'Welded topology overlay' : 'Topology overlay hidden'); els.live.textContent = state.showTopology ? 'Topology overlay: shared pipe-skin edges' : 'Topology overlay hidden'; });
   els.export.addEventListener('click', () => { const link = document.createElement('a'); link.download = `plantforge-${state.species}-${els.seed.value}.png`; link.href = els.canvas.toDataURL('image/png'); link.click(); showToast('Preview exported'); });
-  els.viewport.addEventListener('pointerdown', event => { state.dragging = true; state.pointerX = event.clientX; state.pointerY = event.clientY; els.viewport.setPointerCapture(event.pointerId); });
-  els.viewport.addEventListener('pointermove', event => { if (!state.dragging) return; state.camera.yaw += (event.clientX - state.pointerX) * .008; state.camera.pitch = clamp(state.camera.pitch + (event.clientY - state.pointerY) * .006, -.72, .7); state.pointerX = event.clientX; state.pointerY = event.clientY; });
-  els.viewport.addEventListener('pointerup', () => { state.dragging = false; });
-  els.viewport.addEventListener('pointercancel', () => { state.dragging = false; });
+  // Blender navigation: MMB orbit, Shift+MMB pan, Ctrl+MMB dolly. LMB is
+  // intentionally left free for future branch/tip selection tools.
+  els.viewport.addEventListener('contextmenu', event => event.preventDefault());
+  els.viewport.addEventListener('pointerdown', event => {
+    if (event.button !== 1) return;
+    event.preventDefault(); state.dragging = true; state.pointerX = event.clientX; state.pointerY = event.clientY;
+    state.navMode = event.ctrlKey ? 'zoom' : event.shiftKey ? 'pan' : 'orbit'; els.viewport.setPointerCapture(event.pointerId);
+  });
+  els.viewport.addEventListener('pointermove', event => {
+    if (!state.dragging) return;
+    const dx = event.clientX - state.pointerX, dy = event.clientY - state.pointerY;
+    if (state.navMode === 'pan') { const panScale = state.camera.distance * .0028; state.camera.panX -= dx * panScale; state.camera.panY += dy * panScale; }
+    else if (state.navMode === 'zoom') state.camera.distance = clamp(state.camera.distance + dy * .035, 4.5, 24);
+    else { state.camera.yaw += dx * .008; state.camera.pitch = clamp(state.camera.pitch + dy * .006, -.85, 1.45); }
+    state.pointerX = event.clientX; state.pointerY = event.clientY;
+  });
+  els.viewport.addEventListener('pointerup', event => { state.dragging = false; state.navMode = null; if (els.viewport.hasPointerCapture(event.pointerId)) els.viewport.releasePointerCapture(event.pointerId); });
+  els.viewport.addEventListener('pointercancel', () => { state.dragging = false; state.navMode = null; });
   els.viewport.addEventListener('wheel', event => { event.preventDefault(); state.camera.distance = clamp(state.camera.distance + event.deltaY * .012, 4.5, 24); }, { passive: false });
   function setHelp(open) { els.helpModal.classList.toggle('hidden', !open); }
   els.help.addEventListener('click', () => setHelp(true)); els.closeHelp.addEventListener('click', () => setHelp(false)); els.doneHelp.addEventListener('click', () => setHelp(false)); els.helpModal.addEventListener('click', e => { if (e.target === els.helpModal) setHelp(false); }); els.learn.addEventListener('click', e => { e.preventDefault(); setHelp(true); });
-  document.addEventListener('keydown', event => { if (event.target.matches('input, select, textarea')) return; if (event.key.toLowerCase() === 'g') generatePlant(); if (event.key.toLowerCase() === 'r') els.randomize.click(); if (event.code === 'Space') { event.preventDefault(); els.pause.click(); } if (event.key === 'Escape') setHelp(false); });
+  document.addEventListener('keydown', event => {
+    if (event.target.matches('input, select, textarea')) return;
+    if (event.key.toLowerCase() === 'g') generatePlant();
+    if (event.key.toLowerCase() === 'r') els.randomize.click();
+    if (event.key.toLowerCase() === 'w') els.topology.click();
+    if (event.code === 'Space') { event.preventDefault(); els.pause.click(); }
+    if (event.key === 'Home' || event.key === '.') els.frame.click();
+    // Blender-style orthographic-ish inspection views around the specimen.
+    if (event.code === 'Numpad1') { state.camera.yaw = 0; state.camera.pitch = 0; }
+    if (event.code === 'Numpad3') { state.camera.yaw = Math.PI / 2; state.camera.pitch = 0; }
+    if (event.code === 'Numpad7') { state.camera.yaw = 0; state.camera.pitch = 1.35; }
+    if (event.key === 'Escape') setHelp(false);
+  });
 
   // Keep the animation loop on one clock. With falling leaves enabled, only
   // uniforms change every frame; no particle positions are allocated in JS.

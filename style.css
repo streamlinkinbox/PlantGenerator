@@ -54,6 +54,7 @@ h1, h2, p { margin: 0; }
 .section-label { display: flex; align-items: center; margin-bottom: 17px; gap: 9px; }
 .section-label > span:first-child { color: var(--lime); font: 10px var(--mono); }
 .section-label h2 { text-transform: uppercase; color: #a8b7ad; font: 10px var(--mono); letter-spacing: .12em; }
+.fixed-pill { margin-left: auto; color: #7b9a68; font: 7px var(--mono); letter-spacing: .08em; }
 .mini-info { margin-left: auto; width: 15px; height: 15px; border-radius: 50%; background: #27342c; color: #9fb2a3; font: 9px var(--mono); }
 .species-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
 .species-card { min-height: 55px; padding: 8px 8px; display: grid; grid-template-columns: 30px 1fr 9px; align-items: center; text-align: left; gap: 7px; background: #17211c; border: 1px solid transparent; border-radius: 6px; transition: .2s; }
@@ -63,6 +64,14 @@ h1, h2, p { margin: 0; }
 .species-card small { display: block; margin-top: 2px; color: #72837a; font: 9px var(--mono); white-space: nowrap; }
 .species-card em { font-style: normal; color: #748c79; font-size: 15px; transform: rotate(-25deg); }
 .species-icon { width: 28px; height: 33px; position: relative; display: block; }
+.oak-profile { display: grid; grid-template-columns: 37px 1fr 17px; align-items: center; gap: 10px; min-height: 61px; padding: 10px 11px; background: #1b2a20; border: 1px solid #79a34d; border-radius: 5px; box-shadow: inset 0 0 0 1px rgba(194,245,107,.06); }
+.oak-profile strong, .oak-profile small { display: block; }
+.oak-profile strong { color: #d4e0d1; font-size: 11px; font-weight: 700; }
+.oak-profile strong em { color: #88a279; font: 9px var(--mono); font-style: normal; margin-left: 4px; }
+.oak-profile small { margin-top: 5px; color: #75897a; font: 8px var(--mono); white-space: nowrap; }
+.profile-check { display: grid; place-items: center; width: 16px; height: 16px; border: 1px solid #6a9855; border-radius: 50%; color: var(--lime); font: 11px var(--mono); }
+.profile-note { color: #697c6f; font-size: 9px; line-height: 1.55; margin-top: 11px; }
+.species-icon
 .species-icon i { display: block; position: absolute; background: #658a5f; }
 .oak-icon:before, .oak-icon:after { content: ''; position: absolute; background: #496f4b; border-radius: 50%; }
 .oak-icon:before { width: 19px; height: 21px; top: 3px; left: 4px; box-shadow: -7px 7px 0 -2px #547952, 7px 6px 0 -2px #719966; }
@@ -130,10 +139,10 @@ input[type=range]::-moz-range-thumb { width: 7px; height: 7px; border: 2px solid
 .live-dot { width: 5px; height: 5px; }
 .stage-tools { display: flex; gap: 5px; margin-left: auto; }
 .tool-button { color: #899a8d; background: transparent; border: 1px solid transparent; border-radius: 3px; padding: 7px 8px; font: 9px var(--mono); }
-.tool-button:hover { color: var(--lime); border-color: var(--line-strong); background: #172119; } .tool-button span { color: #5e7364; margin-left: 5px; } .pause-icon { color: var(--lime) !important; font-size: 12px; letter-spacing: -3px; margin-right: 4px; }
+.tool-button:hover, .tool-button.active { color: var(--lime); border-color: #5b7d4a; background: #172119; } .tool-button span { color: #5e7364; margin-left: 5px; } .pause-icon { color: var(--lime) !important; font-size: 12px; letter-spacing: -3px; margin-right: 4px; }
 .export-tool { color: #bbd6a7; background: #1a291f; border-color: #334c37; } .export-tool b { color: var(--lime); font-size: 14px; margin-left: 7px; }
-.viewport { position: relative; min-height: 0; flex: 1; overflow: hidden; cursor: grab; background: radial-gradient(ellipse at 52% 46%, #1d3527 0%, #14251c 25%, #0e1813 67%); }
-.viewport:active { cursor: grabbing; }
+.viewport { position: relative; min-height: 0; flex: 1; overflow: hidden; cursor: default; background: radial-gradient(ellipse at 52% 46%, #1d3527 0%, #14251c 25%, #0e1813 67%); }
+.viewport:active { cursor: default; }
 #glCanvas { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; }
 .viewport-grid { position: absolute; z-index: 2; inset: 48% -8% -18%; opacity: .29; pointer-events: none; background: repeating-linear-gradient(90deg, transparent 0, transparent 39px, rgba(143, 190, 138, .12) 40px), repeating-linear-gradient(0deg, transparent 0, transparent 39px, rgba(143, 190, 138, .12) 40px); transform: perspective(140px) rotateX(45deg); transform-origin: center top; mask-image: linear-gradient(to bottom, black, transparent 85%); }
 .viewport:after { content: ''; position: absolute; z-index: 2; pointer-events: none; inset: 0; background: radial-gradient(ellipse at center, transparent 43%, rgba(7, 12, 9, .3) 100%); }
