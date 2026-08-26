@@ -66,7 +66,7 @@
       });
       maxRadius = Math.max(maxRadius, segment.r1, segment.r2);
     });
-    const margin = Math.max(.2, maxRadius * 1.45), nx = 44, ny = 88, nz = 44;
+    const margin = Math.max(.2, maxRadius * 1.45), nx = 52, ny = 104, nz = 52;
     minX -= margin; maxX += margin; minY = Math.min(-margin, minY - margin); maxY += margin; minZ -= margin; maxZ += margin;
     const stepX = (maxX - minX) / (nx - 1), stepY = (maxY - minY) / (ny - 1), stepZ = (maxZ - minZ) / (nz - 1);
     const grid = new Float32Array(nx * ny * nz);
@@ -129,7 +129,23 @@
       if ((grid[gridIndex(x, y, z)] < 0) === (grid[gridIndex(x, y, z + 1)] < 0)) continue;
       addQuad(cellVertices[cellIndex(x - 1, y - 1, z)], cellVertices[cellIndex(x, y - 1, z)], cellVertices[cellIndex(x, y, z)], cellVertices[cellIndex(x - 1, y, z)]);
     }
-    return { vertices, indices };
+    // Surface-net vertices are shared by all adjacent faces. Build smooth
+    // normals from that shared index graph so the bark reads as one continuous
+    // skin rather than a stack of flat primitive caps.
+    const normals = new Float32Array((vertices.length / 6) * 3);
+    for (let i = 0; i < indices.length; i += 3) {
+      const ia = indices[i] * 6, ib = indices[i + 1] * 6, ic = indices[i + 2] * 6;
+      const ab = [vertices[ib] - vertices[ia], vertices[ib + 1] - vertices[ia + 1], vertices[ib + 2] - vertices[ia + 2]];
+      const ac = [vertices[ic] - vertices[ia], vertices[ic + 1] - vertices[ia + 1], vertices[ic + 2] - vertices[ia + 2]];
+      const cross = [ab[1] * ac[2] - ab[2] * ac[1], ab[2] * ac[0] - ab[0] * ac[2], ab[0] * ac[1] - ab[1] * ac[0]];
+      for (const vertex of [indices[i], indices[i + 1], indices[i + 2]]) { normals[vertex * 3] += cross[0]; normals[vertex * 3 + 1] += cross[1]; normals[vertex * 3 + 2] += cross[2]; }
+    }
+    const skinnedVertices = [];
+    for (let i = 0; i < vertices.length / 6; i++) {
+      const normal = norm([normals[i * 3], normals[i * 3 + 1], normals[i * 3 + 2]]);
+      skinnedVertices.push(vertices[i * 6], vertices[i * 6 + 1], vertices[i * 6 + 2], vertices[i * 6 + 3], vertices[i * 6 + 4], vertices[i * 6 + 5], normal[0], normal[1], normal[2]);
+    }
+    return { vertices: skinnedVertices, indices };
   }
 
   function generatePlant() {
@@ -214,9 +230,10 @@
     const fallingIndexes = new Set(selectedFalling.map(({ index }) => index));
     const groundedLeaves = leaves.filter((leaf, index) => !fallingIndexes.has(index));
 
-    state.generated = { segments, leaves: groundedLeaves, falling, height, bark, barkLight, duration: performance.now() - started };
-    updateStats();
+    state.generated = { segments, leaves: groundedLeaves, allLeaves: leaves, falling, height, bark, barkLight, duration: 0 };
     if (state.renderer) state.renderer.upload(state.generated);
+    state.generated.duration = performance.now() - started;
+    updateStats();
     showToast('Specimen regenerated');
     els.live.textContent = `${species.label} specimen generated from seed ${els.seed.value}`;
   }
@@ -227,7 +244,7 @@
     els.stageSpecies.textContent = species.stage;
     els.code.textContent = `PF-${species.code}-${String(els.seed.value).padStart(6, '0')}`;
     els.branchCount.textContent = state.generated.segments.length.toLocaleString();
-    els.leafCount.textContent = state.generated.leaves.length.toLocaleString();
+    els.leafCount.textContent = (els.falling.checked ? state.generated.leaves : state.generated.allLeaves).length.toLocaleString();
     els.particleCount.textContent = els.falling.checked ? state.generated.falling.length.toLocaleString() : 'OFF';
     els.generationTime.textContent = `${Math.max(.008, state.generated.duration / 1000).toFixed(3)} s`;
     els.paletteName.textContent = species.palette;
@@ -264,7 +281,10 @@
       ink: [['#233a32', '#c4dbba'], ['#426455', '#b5ceb1'], ['#526f65', '#d1e0cc'], ['#1b302b', '#a8c6aa']]
     };
     const palette = palettes[type] || palettes.botanical;
-    ctx.fillStyle = type === 'ink' ? '#e5ebe0' : '#ebead7'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    // Keep the atlas background transparent. A solid preview backing is
+    // provided by CSS; alpha in the actual texture is what makes leaf quads
+    // read as leaf silhouettes instead of opaque square tiles.
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.strokeStyle = 'rgba(28,53,35,.13)'; ctx.lineWidth = 1;
     for (let x = 0; x <= canvas.width; x += 80) { ctx.beginPath(); ctx.moveTo(x + .5, 0); ctx.lineTo(x + .5, canvas.height); ctx.stroke(); }
     for (let y = 0; y <= canvas.height; y += 80) { ctx.beginPath(); ctx.moveTo(0, y + .5); ctx.lineTo(canvas.width, y + .5); ctx.stroke(); }
@@ -278,18 +298,19 @@
   const branchVertex = `#version 300 es
     layout(location=0) in vec3 a_position;
     layout(location=1) in vec3 a_color;
+    layout(location=2) in vec3 a_normal;
     uniform mat4 u_projection;
     uniform mat4 u_view;
     out vec3 v_color;
-    out vec3 v_position;
-    void main() { v_color = a_color; v_position = a_position; gl_Position = u_projection * u_view * vec4(a_position, 1.0); }`;
+    out vec3 v_normal;
+    void main() { v_color = a_color; v_normal = a_normal; gl_Position = u_projection * u_view * vec4(a_position, 1.0); }`;
   const branchFragment = `#version 300 es
     precision highp float;
     in vec3 v_color;
-    in vec3 v_position;
+    in vec3 v_normal;
     uniform float u_wire;
     out vec4 outColor;
-    void main() { vec3 color; if (u_wire > .5) color = vec3(.66, .9, .42); else { vec3 normal = normalize(cross(dFdx(v_position), dFdy(v_position))); float light = .62 + .38 * abs(dot(normal, normalize(vec3(-.42, .82, .36)))); color = v_color * light; } outColor = vec4(color, mix(1.0, .78, u_wire)); }`;
+    void main() { vec3 color; if (u_wire > .5) color = vec3(.66, .9, .42); else { float light = .62 + .38 * abs(dot(normalize(v_normal), normalize(vec3(-.42, .82, .36)))); color = v_color * light; } outColor = vec4(color, mix(1.0, .78, u_wire)); }`;
   const leafVertex = `#version 300 es
     layout(location=0) in vec2 a_corner;
     layout(location=1) in vec3 a_offset;
@@ -325,7 +346,8 @@
         world.z += cos(u_time * (.58 + a_seed) + phase) * (.08 + u_wind * .13);
         world.x += u_wind * fall * .12;
       }
-      float ca = cos(a_angle), sa = sin(a_angle);
+      float leafAngle = a_angle + (u_falling > .5 ? u_time * (.5 + a_seed * .8) : sin(u_time + a_seed) * .025);
+      float ca = cos(leafAngle), sa = sin(leafAngle);
       vec2 rotated = vec2(a_corner.x * ca - a_corner.y * sa, a_corner.x * sa + a_corner.y * ca);
       vec3 pos = world + u_camRight * (rotated.x * a_size) + u_camUp * (rotated.y * a_size * .94);
       gl_Position = u_projection * u_view * vec4(pos, 1.0);
@@ -398,6 +420,13 @@
     configureLeafVao(renderer.fallingVao, renderer.fallingSourceBuffer);
     gl.bindVertexArray(null);
 
+    const packLeaves = (collection) => { const packed = []; collection.forEach(leaf => packed.push(leaf.position[0], leaf.position[1], leaf.position[2], leaf.size, leaf.angle, leaf.cell, leaf.seed, leaf.tint[0], leaf.tint[1], leaf.tint[2], 0, 0)); return new Float32Array(packed); };
+    renderer.uploadLeaves = (data) => {
+      const staticLeaves = els.falling.checked ? data.leaves : data.allLeaves;
+      gl.bindBuffer(gl.ARRAY_BUFFER, renderer.leafSourceBuffer); gl.bufferData(gl.ARRAY_BUFFER, packLeaves(staticLeaves), gl.STATIC_DRAW);
+      gl.bindBuffer(gl.ARRAY_BUFFER, renderer.fallingSourceBuffer); gl.bufferData(gl.ARRAY_BUFFER, packLeaves(data.falling), gl.STATIC_DRAW);
+      renderer.leafCount = staticLeaves.length; renderer.fallingCount = data.falling.length;
+    };
     renderer.upload = (data) => {
       // One signed-distance surface for the full skeleton: no object-per-branch
       // seams, no overlapping caps, and actual shared topology at junctions.
@@ -405,15 +434,13 @@
       const branchData = mesh.vertices, indexData = mesh.indices;
       gl.bindVertexArray(renderer.branchVao);
       gl.bindBuffer(gl.ARRAY_BUFFER, renderer.branchBuffer); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(branchData), gl.STATIC_DRAW);
-      gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 24, 0);
-      gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 24, 12);
+      gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 36, 0);
+      gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 36, 12);
+      gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 36, 24);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, renderer.branchIndex); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(indexData), gl.STATIC_DRAW);
       renderer.branchIndexCount = indexData.length;
       gl.bindVertexArray(null);
-      const packLeaves = (collection) => { const packed = []; collection.forEach(leaf => packed.push(leaf.position[0], leaf.position[1], leaf.position[2], leaf.size, leaf.angle, leaf.cell, leaf.seed, leaf.tint[0], leaf.tint[1], leaf.tint[2], 0, 0)); return new Float32Array(packed); };
-      gl.bindBuffer(gl.ARRAY_BUFFER, renderer.leafSourceBuffer); gl.bufferData(gl.ARRAY_BUFFER, packLeaves(data.leaves), gl.STATIC_DRAW);
-      gl.bindBuffer(gl.ARRAY_BUFFER, renderer.fallingSourceBuffer); gl.bufferData(gl.ARRAY_BUFFER, packLeaves(data.falling), gl.STATIC_DRAW);
-      renderer.leafCount = data.leaves.length; renderer.fallingCount = data.falling.length;
+      renderer.uploadLeaves(data);
     };
 
     renderer.updateTexture = (source) => {
@@ -450,7 +477,8 @@
       if (!state.generated) return;
       const scaleY = rect.height / (state.generated.height * 1.35), cx = rect.width / 2;
       ctx.lineCap = 'round'; state.generated.segments.forEach(s => { ctx.beginPath(); ctx.moveTo(cx + s.a[0] * 50, rect.height - 58 - s.a[1] * scaleY); ctx.lineTo(cx + s.b[0] * 50, rect.height - 58 - s.b[1] * scaleY); ctx.strokeStyle = '#79543a'; ctx.lineWidth = Math.max(1, s.r1 * 22); ctx.stroke(); });
-      state.generated.leaves.forEach(l => { ctx.save(); ctx.translate(cx + l.position[0] * 50, rect.height - 58 - l.position[1] * scaleY); ctx.rotate(l.angle); ctx.fillStyle = '#71975b'; ctx.beginPath(); ctx.ellipse(0, 0, l.size * 24, l.size * 38, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore(); });
+      const fallbackLeaves = els.falling.checked ? state.generated.leaves : state.generated.allLeaves;
+      fallbackLeaves.forEach(l => { ctx.save(); ctx.translate(cx + l.position[0] * 50, rect.height - 58 - l.position[1] * scaleY); ctx.rotate(l.angle); ctx.fillStyle = '#71975b'; ctx.beginPath(); ctx.ellipse(0, 0, l.size * 24, l.size * 38, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore(); });
     }; state.renderer = { upload: () => {}, updateTexture: () => {}, render: render }; return state.renderer;
   }
 
@@ -469,7 +497,7 @@
   function scheduleGeneration() { clearTimeout(generationTimer); generationTimer = setTimeout(generatePlant, 130); }
   [els.height, els.branching, els.density, els.seed].forEach(input => input.addEventListener('input', () => { updateControls(); scheduleGeneration(); }));
   els.wind.addEventListener('input', updateControls);
-  els.falling.addEventListener('change', updateStats);
+  els.falling.addEventListener('change', () => { updateStats(); if (state.renderer && state.generated && state.renderer.uploadLeaves) state.renderer.uploadLeaves(state.generated); });
   els.species.forEach(card => card.addEventListener('click', () => { els.species.forEach(other => other.classList.remove('active')); card.classList.add('active'); state.species = card.dataset.species; generatePlant(); }));
   els.atlas.addEventListener('change', () => { state.atlas = els.atlas.value; state.customAtlas = null; els.atlasName.textContent = `${els.atlas.options[els.atlas.selectedIndex].text.split(' / ')[0].toUpperCase()} ATLAS`; drawAtlas(state.atlas); if (state.renderer) state.renderer.updateTexture(els.atlasPreview); showToast('Leaf atlas assigned'); });
   els.upload.addEventListener('change', () => { const file = els.upload.files && els.upload.files[0]; if (!file) return; const image = new Image(); image.onload = () => { state.customAtlas = image; els.atlasName.textContent = 'IMPORTED ATLAS'; drawAtlas('', image); if (state.renderer) state.renderer.updateTexture(els.atlasPreview); showToast('Custom atlas imported'); }; image.src = URL.createObjectURL(file); });
