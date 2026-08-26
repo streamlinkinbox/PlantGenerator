@@ -63,6 +63,14 @@
     };
     const barkColor = (point) => { const shade = clamp(.88 + Math.sin(point[0] * 3.7 + point[2] * 4.1) * .05 + Math.sin(point[1] * 6.1) * .025, .74, 1.03); return [clamp(bark[0] * shade + barkLight[0] * .06, 0, 1), clamp(bark[1] * shade + barkLight[1] * .06, 0, 1), clamp(bark[2] * shade + barkLight[2] * .06, 0, 1)]; };
     const frameFor = (axis) => { const direction = norm(axis); const reference = Math.abs(direction[1]) > .88 ? [1, 0, 0] : [0, 1, 0]; const u = norm([direction[1] * reference[2] - direction[2] * reference[1], direction[2] * reference[0] - direction[0] * reference[2], direction[0] * reference[1] - direction[1] * reference[0]]); const v = [direction[1] * u[2] - direction[2] * u[1], direction[2] * u[0] - direction[0] * u[2], direction[0] * u[1] - direction[1] * u[0]]; return { u, v }; };
+    // Round the junction control shell. The quad patch and its port holes stay
+    // explicit, but the control shell is mapped to a smooth sphere so the
+    // rendered collar does not inherit an angular silhouette.
+    const roundedHubPoint = (node, face, half, s, t) => {
+      const local = add(scale(face.normal, half), add(scale(face.s, s), scale(face.t, t))), x = local[0] / half, y = local[1] / half, z = local[2] / half;
+      const sx = x * Math.sqrt(Math.max(0, 1 - y * y / 2 - z * z / 2 + y * y * z * z / 3)), sy = y * Math.sqrt(Math.max(0, 1 - z * z / 2 - x * x / 2 + z * z * x * x / 3)), sz = z * Math.sqrt(Math.max(0, 1 - x * x / 2 - y * y / 2 + x * x * y * y / 3));
+      return add(node.position, [sx * half, sy * half, sz * half]);
+    };
     const addQuad = (a, b, c, d) => { indices.push(a, b, c, a, c, d); lineIndices.push(a, b, b, c, c, d, d, a); };
     const ports = nodes.map(() => []);
     edges.forEach((edge, edgeIndex) => {
@@ -82,8 +90,8 @@
       ports[node.id].forEach(port => { let bestFace = -1, bestDot = -Infinity; unused.forEach(faceIndex => { const face = faces[faceIndex], dot = port.direction[0] * face.normal[0] + port.direction[1] * face.normal[1] + port.direction[2] * face.normal[2]; if (dot > bestDot) { bestDot = dot; bestFace = faceIndex; } }); if (bestFace < 0) bestFace = 0; unused.delete(bestFace); assignments.set(`${port.edgeIndex}:${port.side}`, bestFace); });
       const half = Math.max(.018, node.radius * 1.33), holeHalf = Math.max(.014, node.radius * .7), grid = [-half, -holeHalf, 0, holeHalf, half];
       faces.forEach((face, faceIndex) => {
-        const faceCenter = add(node.position, scale(face.normal, half)), faceGrid = [];
-        for (let y = 0; y < grid.length; y++) { faceGrid[y] = []; for (let x = 0; x < grid.length; x++) { const point = add(faceCenter, add(scale(face.s, grid[x]), scale(face.t, grid[y]))); faceGrid[y][x] = pushVertex(point, barkColor(point)); } }
+        const faceGrid = [];
+        for (let y = 0; y < grid.length; y++) { faceGrid[y] = []; for (let x = 0; x < grid.length; x++) { const point = roundedHubPoint(node, face, half, grid[x], grid[y]); faceGrid[y][x] = pushVertex(point, barkColor(point)); } }
         for (let y = 0; y < grid.length - 1; y++) for (let x = 0; x < grid.length - 1; x++) { if (x >= 1 && x <= 2 && y >= 1 && y <= 2) continue; addQuad(faceGrid[y][x], faceGrid[y][x + 1], faceGrid[y + 1][x + 1], faceGrid[y + 1][x]); }
         const holeBoundary = [faceGrid[1][1], faceGrid[1][2], faceGrid[1][3], faceGrid[2][3], faceGrid[3][3], faceGrid[3][2], faceGrid[3][1], faceGrid[2][1]];
         const facePort = ports[node.id].find(port => assignments.get(`${port.edgeIndex}:${port.side}`) === faceIndex);
@@ -91,12 +99,12 @@
           const circle = [];
           // The eight-point port loop maps to the eight-point square hole.
           const angles = [-3 * Math.PI / 4, -Math.PI / 2, -Math.PI / 4, 0, Math.PI / 4, Math.PI / 2, 3 * Math.PI / 4, Math.PI];
-          angles.forEach(angle => circle.push(pushVertex(add(faceCenter, add(scale(face.s, Math.cos(angle) * holeHalf), scale(face.t, Math.sin(angle) * holeHalf))), barkColor(faceCenter))));
+          angles.forEach(angle => { const point = roundedHubPoint(node, face, half, Math.cos(angle) * holeHalf, Math.sin(angle) * holeHalf); circle.push(pushVertex(point, barkColor(point))); });
           for (let i = 0; i < sides; i++) { const next = (i + 1) % sides; addQuad(holeBoundary[i], holeBoundary[next], circle[next], circle[i]); }
           portRings.set(`${facePort.edgeIndex}:${facePort.side}`, circle);
         } else {
           // No pipe on this side: close the central 2x2 patch so the hub is
-          // watertight rather than a hollow box with accidental openings.
+          // watertight rather than leaving an accidental opening.
           for (let y = 1; y <= 2; y++) for (let x = 1; x <= 2; x++) addQuad(faceGrid[y][x], faceGrid[y][x + 1], faceGrid[y + 1][x + 1], faceGrid[y + 1][x]);
         }
       });
