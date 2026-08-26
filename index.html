@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0f1513" />
+  <title>PlantForge — procedural plant studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="#" aria-label="PlantForge home">
+        <span class="brand-mark"><span></span><span></span><span></span></span>
+        <span>plant<span>forge</span></span>
+      </a>
+      <div class="breadcrumb"><span>STUDIO</span><i></i><strong>NEW SPECIMEN</strong></div>
+      <div class="top-actions">
+        <span class="engine-state"><b></b> WEBGL2 / GPU READY</span>
+        <button class="icon-button" id="helpBtn" aria-label="Open help">?</button>
+        <button class="avatar" aria-label="Account">AF</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <aside class="panel controls-panel">
+        <div class="panel-heading">
+          <div>
+            <p class="eyebrow">SPECIMEN BUILDER</p>
+            <h1>Shape a living form.</h1>
+          </div>
+          <button class="ghost-icon" id="randomizeBtn" title="Randomize seed" aria-label="Randomize seed">↻</button>
+        </div>
+
+        <div class="control-scroll">
+          <section class="control-section first-section">
+            <div class="section-label"><span>01</span><h2>Base species</h2></div>
+            <div class="species-grid">
+              <button class="species-card active" data-species="oak">
+                <span class="species-icon oak-icon"><i></i><i></i><i></i></span>
+                <span><strong>Oak</strong><small>Broad canopy</small></span>
+                <em>⌁</em>
+              </button>
+              <button class="species-card" data-species="pine">
+                <span class="species-icon pine-icon"><i></i><i></i><i></i></span>
+                <span><strong>Pine</strong><small>Layered boughs</small></span>
+                <em>⌁</em>
+              </button>
+              <button class="species-card" data-species="willow">
+                <span class="species-icon willow-icon"><i></i><i></i><i></i></span>
+                <span><strong>Willow</strong><small>Soft cascade</small></span>
+                <em>⌁</em>
+              </button>
+              <button class="species-card" data-species="fern">
+                <span class="species-icon fern-icon"><i></i><i></i><i></i></span>
+                <span><strong>Fern</strong><small>Low rosette</small></span>
+                <em>⌁</em>
+              </button>
+            </div>
+          </section>
+
+          <section class="control-section">
+            <div class="section-label"><span>02</span><h2>Growth rules</h2><button class="mini-info" title="Every value is seeded for repeatable results">i</button></div>
+            <div class="range-control">
+              <div class="range-top"><label for="height">Height</label><output id="heightValue">7.4 m</output></div>
+              <input id="height" type="range" min="2" max="14" step="0.1" value="7.4" />
+              <div class="range-scale"><span>MIN</span><span>MAX</span></div>
+            </div>
+            <div class="range-control">
+              <div class="range-top"><label for="branching">Branching</label><output id="branchingValue">64%</output></div>
+              <input id="branching" type="range" min="15" max="95" step="1" value="64" />
+              <div class="range-scale"><span>SPARSE</span><span>DENSE</span></div>
+            </div>
+            <div class="range-control">
+              <div class="range-top"><label for="leafDensity">Leaf density</label><output id="leafDensityValue">78%</output></div>
+              <input id="leafDensity" type="range" min="10" max="100" step="1" value="78" />
+              <div class="range-scale"><span>LIGHT</span><span>LUSH</span></div>
+            </div>
+            <div class="range-control">
+              <div class="range-top"><label for="seed">Seed</label><output id="seedValue">482 106</output></div>
+              <input id="seed" type="range" min="1" max="999999" step="1" value="482106" />
+            </div>
+          </section>
+
+          <section class="control-section">
+            <div class="section-label"><span>03</span><h2>Leaf material</h2></div>
+            <div class="field-row">
+              <label class="field-label" for="atlasSelect">Texture atlas</label>
+              <select id="atlasSelect" class="select-field">
+                <option value="botanical">Botanical / 2 × 2</option>
+                <option value="autumn">Autumn / 2 × 2</option>
+                <option value="ink">Ink study / 2 × 2</option>
+              </select>
+            </div>
+            <div class="atlas-wrap">
+              <canvas id="atlasPreview" width="160" height="160" aria-label="Leaf texture atlas preview"></canvas>
+              <div class="atlas-copy"><span class="atlas-dot"></span><span id="atlasName">BOTANICAL ATLAS</span><small>4 variations · RGBA</small></div>
+              <button id="downloadAtlas" class="text-button" title="Download current atlas">DOWNLOAD</button>
+            </div>
+            <div class="material-actions">
+              <label class="upload-button"><input id="uploadAtlas" type="file" accept="image/png,image/jpeg,image/webp" /> <span>＋</span> Import atlas</label>
+              <span class="material-note">Use a 2 × 2 tile sheet</span>
+            </div>
+          </section>
+
+          <section class="control-section">
+            <div class="section-label"><span>04</span><h2>Motion field</h2><span class="live-pill"><b></b> LIVE</span></div>
+            <div class="wind-card">
+              <div class="wind-visual"><span class="wind-line line-a"></span><span class="wind-line line-b"></span><span class="wind-line line-c"></span><span class="wind-arrow">→</span></div>
+              <div class="wind-values"><div><small>Direction</small><strong id="windDirectionValue">EAST</strong></div><div><small>Strength</small><strong id="windStrengthValue">38%</strong></div></div>
+            </div>
+            <div class="range-control compact-range">
+              <div class="range-top"><label for="wind">Wind strength</label><output id="windValue">38%</output></div>
+              <input id="wind" type="range" min="0" max="100" step="1" value="38" />
+            </div>
+            <label class="switch-row"><span><strong>Falling leaves</strong><small>GPU particle pass · deterministic</small></span><input id="fallingLeaves" type="checkbox" checked /><i class="toggle"></i></label>
+          </section>
+        </div>
+
+        <div class="panel-footer">
+          <button class="secondary-button" id="resetBtn">Reset</button>
+          <button class="primary-button" id="generateBtn"><span>Generate specimen</span><b>↗</b></button>
+        </div>
+      </aside>
+
+      <section class="stage-panel">
+        <div class="stage-toolbar">
+          <div class="stage-title"><span class="live-dot"></span><span>PREVIEW / <strong id="stageSpecies">OAK CANOPY</strong></span></div>
+          <div class="stage-tools"><button id="pauseBtn" class="tool-button"><span class="pause-icon">Ⅱ</span><span id="pauseLabel">Pause</span></button><button id="frameBtn" class="tool-button">Frame <span>⌘F</span></button><button id="exportBtn" class="tool-button export-tool">Export <b>↓</b></button></div>
+        </div>
+        <div class="viewport" id="viewport">
+          <canvas id="glCanvas" aria-label="Interactive generated plant preview"></canvas>
+          <div class="viewport-grid"></div>
+          <div class="axis-widget" aria-hidden="true"><span class="axis-y">Y</span><span class="axis-x">X</span><span class="axis-z">Z</span><i></i></div>
+          <div class="viewport-note"><span>DRAG TO ORBIT</span><i></i><span>SCROLL TO ZOOM</span></div>
+          <div class="preview-chip"><span class="chip-icon">✦</span><span><strong>PROCEDURAL</strong><small>Seed locked · repeatable</small></span></div>
+          <div class="render-toast" id="renderToast">Specimen regenerated</div>
+        </div>
+        <div class="stage-footer">
+          <div class="metric"><span class="metric-icon branches-icon">⌇</span><div><small>BRANCHES</small><strong id="branchCount">42</strong></div></div>
+          <div class="metric"><span class="metric-icon leaf-icon">✦</span><div><small>LEAVES</small><strong id="leafCount">1,284</strong></div></div>
+          <div class="metric"><span class="metric-icon particle-icon">◌</span><div><small>GPU PARTICLES</small><strong id="particleCount">180</strong></div></div>
+          <div class="metric metric-last"><span class="metric-icon frame-icon">▧</span><div><small>FRAME TIME</small><strong id="frameTime">1.8 ms</strong></div></div>
+          <div class="fps-meter"><span>60</span><div><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><small>FPS</small></div>
+        </div>
+      </section>
+
+      <aside class="panel info-panel">
+        <div class="info-heading"><p class="eyebrow">SPECIMEN DATA</p><div class="code-label"><span class="status-dot"></span><span id="codeLabel">PF-OAK-482106</span></div></div>
+        <div class="info-hero"><div class="ring-graphic"><div class="ring ring-one"></div><div class="ring ring-two"></div><div class="ring-core"></div><span>01</span></div><div><small>GENERATION</small><strong id="generationTime">0.018 s</strong><p>deterministic pass</p></div></div>
+        <div class="data-list">
+          <div class="data-row"><span>Algorithm</span><strong>Recursive L-system <em>v2.4</em></strong></div>
+          <div class="data-row"><span>Geometry</span><strong>Instanced mesh</strong></div>
+          <div class="data-row"><span>Leaf shader</span><strong><i class="green-check">✓</i> Atlas sampled</strong></div>
+          <div class="data-row"><span>Simulation</span><strong><i class="green-check">✓</i> GPU deterministic</strong></div>
+        </div>
+        <div class="palette-section"><div class="palette-heading"><span>Color palette</span><small id="paletteName">MOSS / BARK</small></div><div class="palette"><i style="background:#21382e"></i><i style="background:#52795a"></i><i style="background:#a9c889"></i><i style="background:#d9bb70"></i><i style="background:#503c2d"></i></div></div>
+        <div class="notes-card"><div class="note-title"><span>✦</span> <strong>ABOUT THIS PASS</strong></div><p>This preview keeps the plant on the GPU: branches are instanced once, while wind and falling leaves are evaluated in the vertex shader.</p><a href="#" id="learnLink">Read the rendering notes <span>↗</span></a></div>
+        <div class="shortcut-list"><div><span>G</span> Generate</div><div><span>Space</span> Pause motion</div><div><span>R</span> Randomize</div></div>
+      </aside>
+    </main>
+  </div>
+  <div class="modal hidden" id="helpModal"><div class="modal-card"><button class="modal-close" id="closeHelp">×</button><p class="eyebrow">HOW IT WORKS</p><h2>A small, repeatable ecosystem.</h2><p>PlantForge grows a seeded branch skeleton on each pass, then sends leaf transforms to WebGL instancing. Falling leaves never travel through JavaScript: a deterministic phase, wind vector, and gravity are evaluated per particle in the GPU vertex shader.</p><div class="modal-points"><span><b>01</b> Choose a species and growth rules.</span><span><b>02</b> Pick or import a four-tile atlas.</span><span><b>03</b> Drag the viewport to explore your specimen.</span></div><button class="primary-button" id="doneHelp">Got it <b>↗</b></button></div></div>
+  <div class="sr-only" aria-live="polite" id="liveRegion"></div>
+  <script src="app.js"></script>
+</body>
+</html>
