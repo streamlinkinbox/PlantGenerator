@@ -11,7 +11,7 @@ python3 -m http.server 4173
 - The UI is intentionally focused on one species: English oak (*Quercus robur*).
 - The seeded centerline grows a persistent leader, puts substantial limbs through the lower two-thirds of the trunk, uses wider lower branch angles, and tapers every order.
 - Child radii use a pipe-model-inspired area rule (`r_child ≈ r_parent / sqrt(outgoing pipes)`) rather than arbitrary independent thicknesses.
-- Branches are an endpoint graph, not cylinders inserted into parent segments. One indexed quad-ring skin is built from the graph; endpoint rings are shared at branching nodes, Y/N junctions are connected in the same mesh, and terminal rings alone are capped.
+- Branches are an endpoint graph, not cylinders inserted into parent segments. One indexed quad-ring skin is built from the graph; branching nodes use a subdivided quad hub with explicit port holes, each branch is welded to a port loop, Y/N junctions are part of the same watertight mesh, and there are no terminal cylinder caps.
 - Leaves are created only at generated terminal branch attachments. A deterministic subset is removed from the static canopy and passed to the falling pool, so falling leaves begin at real branch-tip positions and leave visible gaps behind.
 
 ## GPU and interaction

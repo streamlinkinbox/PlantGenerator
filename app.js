@@ -55,32 +55,70 @@
   // endpoint-to-endpoint: a branching event is one shared graph node, not a
   // child cylinder inserted into the middle of its parent.
   function quadPipeMesh(nodes, edges, bark, barkLight) {
-    const sides = 8, vertices = [], indices = [], lineIndices = [];
-    const pushVertex = (point, color) => { vertices.push(point[0], point[1], point[2], color[0], color[1], color[2], 0, 0, 0); return vertices.length / 9 - 1; };
+    const sides = 8, vertices = [], indices = [], lineIndices = [], vertexMap = new Map();
+    const pushVertex = (point, color) => {
+      const key = point.map(value => value.toFixed(5)).join(',');
+      if (vertexMap.has(key)) return vertexMap.get(key);
+      const index = vertices.length / 9; vertices.push(point[0], point[1], point[2], color[0], color[1], color[2], 0, 0, 0); vertexMap.set(key, index); return index;
+    };
     const barkColor = (point) => { const shade = clamp(.88 + Math.sin(point[0] * 3.7 + point[2] * 4.1) * .05 + Math.sin(point[1] * 6.1) * .025, .74, 1.03); return [clamp(bark[0] * shade + barkLight[0] * .06, 0, 1), clamp(bark[1] * shade + barkLight[1] * .06, 0, 1), clamp(bark[2] * shade + barkLight[2] * .06, 0, 1)]; };
     const frameFor = (axis) => { const direction = norm(axis); const reference = Math.abs(direction[1]) > .88 ? [1, 0, 0] : [0, 1, 0]; const u = norm([direction[1] * reference[2] - direction[2] * reference[1], direction[2] * reference[0] - direction[0] * reference[2], direction[0] * reference[1] - direction[1] * reference[0]]); const v = [direction[1] * u[2] - direction[2] * u[1], direction[2] * u[0] - direction[0] * u[2], direction[0] * u[1] - direction[1] * u[0]]; return { u, v }; };
-    const addRing = (center, radius, frame) => { const ring = []; for (let side = 0; side < sides; side++) { const angle = side / sides * Math.PI * 2; const radial = [frame.u[0] * Math.cos(angle) * radius + frame.v[0] * Math.sin(angle) * radius, frame.u[1] * Math.cos(angle) * radius + frame.v[1] * Math.sin(angle) * radius, frame.u[2] * Math.cos(angle) * radius + frame.v[2] * Math.sin(angle) * radius]; ring.push(pushVertex([center[0] + radial[0], center[1] + radial[1], center[2] + radial[2]], barkColor(center))); } return ring; };
     const addQuad = (a, b, c, d) => { indices.push(a, b, c, a, c, d); lineIndices.push(a, b, b, c, c, d, d, a); };
-    const nodeRings = nodes.map(node => addRing(node.position, Math.max(.012, node.radius * 1.16), frameFor(node.axis || [0, 1, 0])));
-    edges.forEach(edge => {
-      const from = nodes[edge.a], to = nodes[edge.b], direction = norm([to.position[0] - from.position[0], to.position[1] - from.position[1], to.position[2] - from.position[2]]), length = vecLength([to.position[0] - from.position[0], to.position[1] - from.position[1], to.position[2] - from.position[2]]), steps = Math.max(3, Math.ceil(length / .34)), rings = [nodeRings[edge.a]], frame = frameFor(direction);
-      for (let step = 1; step < steps; step++) { const t = step / steps, center = lerpVec(from.position, to.position, t), radius = mix(edge.r1, edge.r2, t); rings.push(addRing(center, radius, frame)); }
-      rings.push(nodeRings[edge.b]);
-      for (let ring = 0; ring < rings.length - 1; ring++) for (let side = 0; side < sides; side++) { const next = (side + 1) % sides; addQuad(rings[ring][side], rings[ring][next], rings[ring + 1][next], rings[ring + 1][side]); }
+    const ports = nodes.map(() => []);
+    edges.forEach((edge, edgeIndex) => {
+      const from = nodes[edge.a], to = nodes[edge.b];
+      ports[edge.a].push({ edgeIndex, side: 'a', direction: norm([to.position[0] - from.position[0], to.position[1] - from.position[1], to.position[2] - from.position[2]]) });
+      ports[edge.b].push({ edgeIndex, side: 'b', direction: norm([from.position[0] - to.position[0], from.position[1] - to.position[1], from.position[2] - to.position[2]]) });
     });
-    // Only true terminal ends are capped. Junction rings stay open and are
-    // shared by every incident edge, which is the important topology rule.
-    nodes.forEach((node, nodeId) => { if (node.degree !== 1) return; const center = pushVertex(node.position, barkColor(node.position)), ring = nodeRings[nodeId]; for (let side = 0; side < sides; side++) { const next = (side + 1) % sides; indices.push(ring[side], ring[next], center); lineIndices.push(ring[side], ring[next], ring[next], center, center, ring[side]); } });
+    const portRings = new Map();
+    nodes.forEach(node => {
+      const nodeFrame = frameFor(node.axis || [0, 1, 0]), axis = nodeFrame.u, side = nodeFrame.v;
+      const faces = [
+        { normal: node.axis || [0, 1, 0], s: axis, t: side }, { normal: scale(node.axis || [0, 1, 0], -1), s: axis, t: scale(side, -1) },
+        { normal: axis, s: side, t: node.axis || [0, 1, 0] }, { normal: scale(axis, -1), s: side, t: scale(node.axis || [0, 1, 0], -1) },
+        { normal: side, s: node.axis || [0, 1, 0], t: axis }, { normal: scale(side, -1), s: node.axis || [0, 1, 0], t: scale(axis, -1) }
+      ];
+      const assignments = new Map(), unused = new Set(faces.map((_, index) => index));
+      ports[node.id].forEach(port => { let bestFace = -1, bestDot = -Infinity; unused.forEach(faceIndex => { const face = faces[faceIndex], dot = port.direction[0] * face.normal[0] + port.direction[1] * face.normal[1] + port.direction[2] * face.normal[2]; if (dot > bestDot) { bestDot = dot; bestFace = faceIndex; } }); if (bestFace < 0) bestFace = 0; unused.delete(bestFace); assignments.set(`${port.edgeIndex}:${port.side}`, bestFace); });
+      const half = Math.max(.018, node.radius * 1.33), holeHalf = Math.max(.014, node.radius * .7), grid = [-half, -holeHalf, 0, holeHalf, half];
+      faces.forEach((face, faceIndex) => {
+        const faceCenter = add(node.position, scale(face.normal, half)), faceGrid = [];
+        for (let y = 0; y < grid.length; y++) { faceGrid[y] = []; for (let x = 0; x < grid.length; x++) { const point = add(faceCenter, add(scale(face.s, grid[x]), scale(face.t, grid[y]))); faceGrid[y][x] = pushVertex(point, barkColor(point)); } }
+        for (let y = 0; y < grid.length - 1; y++) for (let x = 0; x < grid.length - 1; x++) { if (x >= 1 && x <= 2 && y >= 1 && y <= 2) continue; addQuad(faceGrid[y][x], faceGrid[y][x + 1], faceGrid[y + 1][x + 1], faceGrid[y + 1][x]); }
+        const holeBoundary = [faceGrid[1][1], faceGrid[1][2], faceGrid[1][3], faceGrid[2][3], faceGrid[3][3], faceGrid[3][2], faceGrid[3][1], faceGrid[2][1]];
+        const facePort = ports[node.id].find(port => assignments.get(`${port.edgeIndex}:${port.side}`) === faceIndex);
+        if (facePort) {
+          const circle = [];
+          // The eight-point port loop maps to the eight-point square hole.
+          const angles = [-3 * Math.PI / 4, -Math.PI / 2, -Math.PI / 4, 0, Math.PI / 4, Math.PI / 2, 3 * Math.PI / 4, Math.PI];
+          angles.forEach(angle => circle.push(pushVertex(add(faceCenter, add(scale(face.s, Math.cos(angle) * holeHalf), scale(face.t, Math.sin(angle) * holeHalf))), barkColor(faceCenter))));
+          for (let i = 0; i < sides; i++) { const next = (i + 1) % sides; addQuad(holeBoundary[i], holeBoundary[next], circle[next], circle[i]); }
+          portRings.set(`${facePort.edgeIndex}:${facePort.side}`, circle);
+        } else {
+          // No pipe on this side: close the central 2x2 patch so the hub is
+          // watertight rather than a hollow box with accidental openings.
+          for (let y = 1; y <= 2; y++) for (let x = 1; x <= 2; x++) addQuad(faceGrid[y][x], faceGrid[y][x + 1], faceGrid[y + 1][x + 1], faceGrid[y + 1][x]);
+        }
+      });
+    });
+    edges.forEach((edge, edgeIndex) => {
+      const from = nodes[edge.a], to = nodes[edge.b], direction = norm([to.position[0] - from.position[0], to.position[1] - from.position[1], to.position[2] - from.position[2]]), length = vecLength([to.position[0] - from.position[0], to.position[1] - from.position[1], to.position[2] - from.position[2]]), steps = Math.max(3, Math.ceil(length / .34)), rings = [portRings.get(`${edgeIndex}:a`)], frame = frameFor(direction);
+      for (let step = 1; step < steps; step++) { const t = step / steps, center = lerpVec(from.position, to.position, t), radius = mix(edge.r1, edge.r2, t); rings.push(addRing(center, radius, frame, pushVertex)); }
+      rings.push(portRings.get(`${edgeIndex}:b`));
+      for (let ring = 0; ring < rings.length - 1; ring++) for (let sideIndex = 0; sideIndex < sides; sideIndex++) { const next = (sideIndex + 1) % sides; addQuad(rings[ring][sideIndex], rings[ring][next], rings[ring + 1][next], rings[ring + 1][sideIndex]); }
+    });
 
     const normals = new Float32Array((vertices.length / 9) * 3);
     for (let i = 0; i < indices.length; i += 3) {
-      const ia = indices[i] * 9, ib = indices[i + 1] * 9, ic = indices[i + 2] * 9;
-      const ab = [vertices[ib] - vertices[ia], vertices[ib + 1] - vertices[ia + 1], vertices[ib + 2] - vertices[ia + 2]], ac = [vertices[ic] - vertices[ia], vertices[ic + 1] - vertices[ia + 1], vertices[ic + 2] - vertices[ia + 2]], cross = [ab[1] * ac[2] - ab[2] * ac[1], ab[2] * ac[0] - ab[0] * ac[2], ab[0] * ac[1] - ab[1] * ac[0]];
+      const ia = indices[i] * 9, ib = indices[i + 1] * 9, ic = indices[i + 2] * 9, ab = [vertices[ib] - vertices[ia], vertices[ib + 1] - vertices[ia + 1], vertices[ib + 2] - vertices[ia + 2]], ac = [vertices[ic] - vertices[ia], vertices[ic + 1] - vertices[ia + 1], vertices[ic + 2] - vertices[ia + 2]], cross = [ab[1] * ac[2] - ab[2] * ac[1], ab[2] * ac[0] - ab[0] * ac[2], ab[0] * ac[1] - ab[1] * ac[0]];
       for (const vertex of [indices[i], indices[i + 1], indices[i + 2]]) { normals[vertex * 3] += cross[0]; normals[vertex * 3 + 1] += cross[1]; normals[vertex * 3 + 2] += cross[2]; }
     }
     for (let i = 0; i < vertices.length / 9; i++) { const normal = norm([normals[i * 3], normals[i * 3 + 1], normals[i * 3 + 2]]); vertices[i * 9 + 6] = normal[0]; vertices[i * 9 + 7] = normal[1]; vertices[i * 9 + 8] = normal[2]; }
     return { vertices, indices, lineIndices };
   }
+
+  // Add a tube ring with the same vertex packing used by the junction ports.
+  function addRing(center, radius, frame, pushVertex) { const ring = []; for (let side = 0; side < 8; side++) { const angle = side / 8 * Math.PI * 2, radial = [frame.u[0] * Math.cos(angle) * radius + frame.v[0] * Math.sin(angle) * radius, frame.u[1] * Math.cos(angle) * radius + frame.v[1] * Math.sin(angle) * radius, frame.u[2] * Math.cos(angle) * radius + frame.v[2] * Math.sin(angle) * radius]; ring.push(pushVertex([center[0] + radial[0], center[1] + radial[1], center[2] + radial[2]], [0.25, 0.16, 0.1])); } return ring; }
 
   function generatePlant() {
     const started = performance.now();
