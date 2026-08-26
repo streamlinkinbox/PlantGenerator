@@ -51,101 +51,35 @@
     return [parseInt(value.slice(0, 2), 16) / 255, parseInt(value.slice(2, 4), 16) / 255, parseInt(value.slice(4, 6), 16) / 255];
   }
 
-  // A surface-net skin turns the overlapping branch centerlines into one
-  // welded mesh. Unlike drawing a cylinder per segment, every Y/N junction is
-  // resolved by the signed-distance field and shares the resulting topology.
-  // The dual grid gives us mostly quad-like flow, triangulated only for GL.
-  function pipeSkinMesh(segments, bark, barkLight) {
-    if (!segments.length) return { vertices: [], indices: [] };
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity, minZ = Infinity, maxZ = -Infinity, maxRadius = 0;
-    segments.forEach(segment => {
-      [segment.a, segment.b].forEach(point => {
-        minX = Math.min(minX, point[0]); maxX = Math.max(maxX, point[0]);
-        minY = Math.min(minY, point[1]); maxY = Math.max(maxY, point[1]);
-        minZ = Math.min(minZ, point[2]); maxZ = Math.max(maxZ, point[2]);
-      });
-      maxRadius = Math.max(maxRadius, segment.r1, segment.r2);
+  // Build the branch network as one clean, quad-ring mesh. The skeleton is
+  // endpoint-to-endpoint: a branching event is one shared graph node, not a
+  // child cylinder inserted into the middle of its parent.
+  function quadPipeMesh(nodes, edges, bark, barkLight) {
+    const sides = 8, vertices = [], indices = [], lineIndices = [];
+    const pushVertex = (point, color) => { vertices.push(point[0], point[1], point[2], color[0], color[1], color[2], 0, 0, 0); return vertices.length / 9 - 1; };
+    const barkColor = (point) => { const shade = clamp(.88 + Math.sin(point[0] * 3.7 + point[2] * 4.1) * .05 + Math.sin(point[1] * 6.1) * .025, .74, 1.03); return [clamp(bark[0] * shade + barkLight[0] * .06, 0, 1), clamp(bark[1] * shade + barkLight[1] * .06, 0, 1), clamp(bark[2] * shade + barkLight[2] * .06, 0, 1)]; };
+    const frameFor = (axis) => { const direction = norm(axis); const reference = Math.abs(direction[1]) > .88 ? [1, 0, 0] : [0, 1, 0]; const u = norm([direction[1] * reference[2] - direction[2] * reference[1], direction[2] * reference[0] - direction[0] * reference[2], direction[0] * reference[1] - direction[1] * reference[0]]); const v = [direction[1] * u[2] - direction[2] * u[1], direction[2] * u[0] - direction[0] * u[2], direction[0] * u[1] - direction[1] * u[0]]; return { u, v }; };
+    const addRing = (center, radius, frame) => { const ring = []; for (let side = 0; side < sides; side++) { const angle = side / sides * Math.PI * 2; const radial = [frame.u[0] * Math.cos(angle) * radius + frame.v[0] * Math.sin(angle) * radius, frame.u[1] * Math.cos(angle) * radius + frame.v[1] * Math.sin(angle) * radius, frame.u[2] * Math.cos(angle) * radius + frame.v[2] * Math.sin(angle) * radius]; ring.push(pushVertex([center[0] + radial[0], center[1] + radial[1], center[2] + radial[2]], barkColor(center))); } return ring; };
+    const addQuad = (a, b, c, d) => { indices.push(a, b, c, a, c, d); lineIndices.push(a, b, b, c, c, d, d, a); };
+    const nodeRings = nodes.map(node => addRing(node.position, Math.max(.012, node.radius * 1.16), frameFor(node.axis || [0, 1, 0])));
+    edges.forEach(edge => {
+      const from = nodes[edge.a], to = nodes[edge.b], direction = norm([to.position[0] - from.position[0], to.position[1] - from.position[1], to.position[2] - from.position[2]]), length = vecLength([to.position[0] - from.position[0], to.position[1] - from.position[1], to.position[2] - from.position[2]]), steps = Math.max(3, Math.ceil(length / .34)), rings = [nodeRings[edge.a]], frame = frameFor(direction);
+      for (let step = 1; step < steps; step++) { const t = step / steps, center = lerpVec(from.position, to.position, t), radius = mix(edge.r1, edge.r2, t); rings.push(addRing(center, radius, frame)); }
+      rings.push(nodeRings[edge.b]);
+      for (let ring = 0; ring < rings.length - 1; ring++) for (let side = 0; side < sides; side++) { const next = (side + 1) % sides; addQuad(rings[ring][side], rings[ring][next], rings[ring + 1][next], rings[ring + 1][side]); }
     });
-    const margin = Math.max(.2, maxRadius * 1.45), nx = 52, ny = 104, nz = 52;
-    minX -= margin; maxX += margin; minY = Math.min(-margin, minY - margin); maxY += margin; minZ -= margin; maxZ += margin;
-    const stepX = (maxX - minX) / (nx - 1), stepY = (maxY - minY) / (ny - 1), stepZ = (maxZ - minZ) / (nz - 1);
-    const grid = new Float32Array(nx * ny * nz);
-    const gridIndex = (x, y, z) => x + nx * (y + ny * z);
-    const fieldAt = (x, y, z) => {
-      let field = Infinity;
-      for (const segment of segments) {
-        const ax = segment.a[0], ay = segment.a[1], az = segment.a[2];
-        const vx = segment.b[0] - ax, vy = segment.b[1] - ay, vz = segment.b[2] - az;
-        const lengthSq = vx * vx + vy * vy + vz * vz || 1;
-        const t = clamp(((x - ax) * vx + (y - ay) * vy + (z - az) * vz) / lengthSq, 0, 1);
-        const dx = x - (ax + vx * t), dy = y - (ay + vy * t), dz = z - (az + vz * t);
-        const radius = mix(segment.r1, segment.r2, t) * 1.18;
-        const distance = Math.hypot(dx, dy, dz) - radius;
-        // Smooth union rounds the crotch of overlapping pipes, giving a
-        // natural branch collar instead of a hard boolean crease.
-        if (field === Infinity) field = distance;
-        else { const k = .12; const h = Math.max(k - Math.abs(field - distance), 0); field = Math.min(field, distance) - h * h / (4 * k); }
-      }
-      return field;
-    };
-    for (let z = 0; z < nz; z++) for (let y = 0; y < ny; y++) for (let x = 0; x < nx; x++) grid[gridIndex(x, y, z)] = fieldAt(minX + x * stepX, minY + y * stepY, minZ + z * stepZ);
+    // Only true terminal ends are capped. Junction rings stay open and are
+    // shared by every incident edge, which is the important topology rule.
+    nodes.forEach((node, nodeId) => { if (node.degree !== 1) return; const center = pushVertex(node.position, barkColor(node.position)), ring = nodeRings[nodeId]; for (let side = 0; side < sides; side++) { const next = (side + 1) % sides; indices.push(ring[side], ring[next], center); lineIndices.push(ring[side], ring[next], ring[next], center, center, ring[side]); } });
 
-    const cellX = nx - 1, cellY = ny - 1, cellZ = nz - 1;
-    const cellIndex = (x, y, z) => x + cellX * (y + cellY * z);
-    const cellVertices = new Int32Array(cellX * cellY * cellZ); cellVertices.fill(-1);
-    const vertices = [], cornerOffsets = [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]];
-    const edgeCorners = [[0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6], [6, 7], [7, 4], [0, 4], [1, 5], [2, 6], [3, 7]];
-    const materialColor = (px, py, pz) => {
-      const shade = clamp(.86 + Math.sin(px * 3.7 + pz * 4.1) * .055 + Math.sin(py * 7.0) * .025, .7, 1.02);
-      return [clamp(mix(bark[0], barkLight[0], clamp(py / Math.max(maxY, .01), 0, 1) * .3) * shade, 0, 1), clamp(mix(bark[1], barkLight[1], clamp(py / Math.max(maxY, .01), 0, 1) * .3) * shade, 0, 1), clamp(mix(bark[2], barkLight[2], clamp(py / Math.max(maxY, .01), 0, 1) * .3) * shade, 0, 1)];
-    };
-    for (let z = 0; z < cellZ; z++) for (let y = 0; y < cellY; y++) for (let x = 0; x < cellX; x++) {
-      const values = cornerOffsets.map(o => grid[gridIndex(x + o[0], y + o[1], z + o[2])]);
-      const hasInside = values.some(value => value < 0), hasOutside = values.some(value => value >= 0);
-      if (!hasInside || !hasOutside) continue;
-      let px = 0, py = 0, pz = 0, intersections = 0;
-      edgeCorners.forEach(([a, b]) => {
-        if ((values[a] < 0) === (values[b] < 0)) return;
-        const va = values[a], vb = values[b], t = clamp(va / (va - vb), 0, 1), ca = cornerOffsets[a], cb = cornerOffsets[b];
-        px += minX + (x + mix(ca[0], cb[0], t)) * stepX; py += minY + (y + mix(ca[1], cb[1], t)) * stepY; pz += minZ + (z + mix(ca[2], cb[2], t)) * stepZ; intersections++;
-      });
-      if (!intersections) continue;
-      px /= intersections; py /= intersections; pz /= intersections;
-      const index = vertices.length / 6, color = materialColor(px, py, pz);
-      vertices.push(px, py, pz, color[0], color[1], color[2]); cellVertices[cellIndex(x, y, z)] = index;
-    }
-    const indices = [];
-    const addQuad = (a, b, c, d) => { if (a < 0 || b < 0 || c < 0 || d < 0) return; indices.push(a, b, c, a, c, d); };
-    // Each sign-changing primal edge gets one quad between its four dual cells.
-    for (let z = 1; z < nz - 1; z++) for (let y = 1; y < ny - 1; y++) for (let x = 0; x < nx - 1; x++) {
-      if ((grid[gridIndex(x, y, z)] < 0) === (grid[gridIndex(x + 1, y, z)] < 0)) continue;
-      addQuad(cellVertices[cellIndex(x, y - 1, z - 1)], cellVertices[cellIndex(x, y, z - 1)], cellVertices[cellIndex(x, y, z)], cellVertices[cellIndex(x, y - 1, z)]);
-    }
-    for (let z = 1; z < nz - 1; z++) for (let y = 0; y < ny - 1; y++) for (let x = 1; x < nx - 1; x++) {
-      if ((grid[gridIndex(x, y, z)] < 0) === (grid[gridIndex(x, y + 1, z)] < 0)) continue;
-      addQuad(cellVertices[cellIndex(x - 1, y, z - 1)], cellVertices[cellIndex(x, y, z - 1)], cellVertices[cellIndex(x, y, z)], cellVertices[cellIndex(x - 1, y, z)]);
-    }
-    for (let z = 0; z < nz - 1; z++) for (let y = 1; y < ny - 1; y++) for (let x = 1; x < nx - 1; x++) {
-      if ((grid[gridIndex(x, y, z)] < 0) === (grid[gridIndex(x, y, z + 1)] < 0)) continue;
-      addQuad(cellVertices[cellIndex(x - 1, y - 1, z)], cellVertices[cellIndex(x, y - 1, z)], cellVertices[cellIndex(x, y, z)], cellVertices[cellIndex(x - 1, y, z)]);
-    }
-    // Surface-net vertices are shared by all adjacent faces. Build smooth
-    // normals from that shared index graph so the bark reads as one continuous
-    // skin rather than a stack of flat primitive caps.
-    const normals = new Float32Array((vertices.length / 6) * 3);
+    const normals = new Float32Array((vertices.length / 9) * 3);
     for (let i = 0; i < indices.length; i += 3) {
-      const ia = indices[i] * 6, ib = indices[i + 1] * 6, ic = indices[i + 2] * 6;
-      const ab = [vertices[ib] - vertices[ia], vertices[ib + 1] - vertices[ia + 1], vertices[ib + 2] - vertices[ia + 2]];
-      const ac = [vertices[ic] - vertices[ia], vertices[ic + 1] - vertices[ia + 1], vertices[ic + 2] - vertices[ia + 2]];
-      const cross = [ab[1] * ac[2] - ab[2] * ac[1], ab[2] * ac[0] - ab[0] * ac[2], ab[0] * ac[1] - ab[1] * ac[0]];
+      const ia = indices[i] * 9, ib = indices[i + 1] * 9, ic = indices[i + 2] * 9;
+      const ab = [vertices[ib] - vertices[ia], vertices[ib + 1] - vertices[ia + 1], vertices[ib + 2] - vertices[ia + 2]], ac = [vertices[ic] - vertices[ia], vertices[ic + 1] - vertices[ia + 1], vertices[ic + 2] - vertices[ia + 2]], cross = [ab[1] * ac[2] - ab[2] * ac[1], ab[2] * ac[0] - ab[0] * ac[2], ab[0] * ac[1] - ab[1] * ac[0]];
       for (const vertex of [indices[i], indices[i + 1], indices[i + 2]]) { normals[vertex * 3] += cross[0]; normals[vertex * 3 + 1] += cross[1]; normals[vertex * 3 + 2] += cross[2]; }
     }
-    const skinnedVertices = [];
-    for (let i = 0; i < vertices.length / 6; i++) {
-      const normal = norm([normals[i * 3], normals[i * 3 + 1], normals[i * 3 + 2]]);
-      skinnedVertices.push(vertices[i * 6], vertices[i * 6 + 1], vertices[i * 6 + 2], vertices[i * 6 + 3], vertices[i * 6 + 4], vertices[i * 6 + 5], normal[0], normal[1], normal[2]);
-    }
-    return { vertices: skinnedVertices, indices };
+    for (let i = 0; i < vertices.length / 9; i++) { const normal = norm([normals[i * 3], normals[i * 3 + 1], normals[i * 3 + 2]]); vertices[i * 9 + 6] = normal[0]; vertices[i * 9 + 7] = normal[1]; vertices[i * 9 + 8] = normal[2]; }
+    return { vertices, indices, lineIndices };
   }
 
   function generatePlant() {
@@ -153,26 +87,28 @@
     const species = speciesInfo[state.species];
     const height = Number(els.height.value), branching = Number(els.branching.value), density = Number(els.density.value);
     const random = rngFactory(Number(els.seed.value));
-    const segments = [], leaves = [], tips = [];
+    const nodes = [], edges = [], leaves = [], tips = [];
     const bark = hexRgb('#4b3527');
     const barkLight = hexRgb('#75513a');
     const leafColors = species.colors.map(hexRgb);
     const depthMax = species.maxDepth;
+    const addNode = (position, axis, radius) => { const id = nodes.length; nodes.push({ id, position: [...position], axis: norm(axis), radius: Math.max(.009, radius), degree: 0 }); return id; };
+    const connectNodes = (from, to, radiusA, radiusB, depth) => { edges.push({ a: from, b: to, r1: radiusA, r2: radiusB, depth }); nodes[from].degree++; nodes[to].degree++; };
 
     // English oak rule set: a persistent central leader, wide lower limbs,
     // shorter upper forks, taper at every order, and near-conserved pipe area.
     // A fork has one leader + side limbs; child radii follow r_child ~=
     // r_parent / sqrt(number of outgoing pipes), rather than arbitrary cones.
-    const addBranch = (start, direction, length, radius, depth, forkBias = 0) => {
+    const addBranch = (startNodeId, direction, length, radius, depth, forkBias = 0) => {
+      const start = nodes[startNodeId].position;
       const bend = [(random() - .5) * species.spread * .24, (random() - .35) * .12, (random() - .5) * species.spread * .24];
       const nextDirection = norm(add(direction, bend));
       const end = add(start, scale(nextDirection, length));
       const endRadius = Math.max(.009, radius * species.taper);
-      const c1 = bark.map((v, i) => v * (1 + (random() - .5) * .08) + (i === 0 ? .015 : 0));
-      const c2 = barkLight.map((v, i) => v * (1 + (random() - .5) * .08));
-      segments.push({ a: start, b: end, r1: radius, r2: endRadius, c1, c2, depth });
+      const endNodeId = addNode(end, nextDirection, endRadius);
+      connectNodes(startNodeId, endNodeId, radius, endRadius, depth);
 
-      if (depth <= 0 || segments.length > 540) { tips.push({ point: end, direction: nextDirection, depth }); return; }
+      if (depth <= 0 || edges.length > 540) { tips.push({ point: end, direction: nextDirection, depth }); return; }
       const heightRatio = clamp(end[1] / Math.max(height, .01), 0, 1);
       let sideChildren = species.baseChildren + (branching > 72 && depth > 1 ? 1 : 0) - (branching < 38 && depth > 1 ? 1 : 0);
       sideChildren = clamp(sideChildren, 1, 3);
@@ -180,26 +116,26 @@
       const outgoingPipes = sideChildren + 1; // leader + side branches; Pipe Model-inspired.
       const childRadius = endRadius * .91 / Math.sqrt(outgoingPipes);
 
-      // Keep the monopodial leader alive through the crown. Its small drift is
-      // deterministic and gives an oak its irregular, not perfectly radial, top.
+      // Keep the monopodial leader alive through the crown. Every new leader
+      // endpoint is a real graph node, so lower limbs and the leader share the
+      // same vertex ring in the quad skin below.
       const leaderDirection = norm(add(nextDirection, [(random() - .5) * .16, .09 + random() * .08, (random() - .5) * .16]));
-      addBranch(end, leaderDirection, length * (.65 + random() * .08), childRadius * 1.05, depth - 1, forkBias + .45);
+      addBranch(endNodeId, leaderDirection, length * (.65 + random() * .08), childRadius * 1.05, depth - 1, forkBias + .45);
 
-      // Oaks place substantial limbs through the lower two-thirds of the trunk;
-      // younger orders progressively start closer to the shoot tip.
+      // Structural limbs are deliberately lower and wider on the oak trunk;
+      // upper orders become more upright and compact.
       for (let i = 0; i < sideChildren; i++) {
-        const lowerCrownT = depth === depthMax ? mix(.16, .72, random()) : mix(.48, .88, random());
-        const branchStart = lerpVec(start, end, lowerCrownT);
         const theta = (i / sideChildren) * Math.PI * 2 + random() * 1.15 + forkBias;
         const lateral = species.spread * (0.48 + random() * .42) * (1.16 - heightRatio * .3);
         const childDirection = norm([Math.cos(theta) * lateral, .36 + random() * .6 + heightRatio * .28, Math.sin(theta) * lateral]);
-        addBranch(branchStart, childDirection, length * (.54 + random() * .1), childRadius * (.9 + random() * .13), depth - 1, theta * .17);
+        addBranch(endNodeId, childDirection, length * (.54 + random() * .1), childRadius * (.9 + random() * .13), depth - 1, theta * .17);
       }
     };
 
-    // Start with one continuous trunk/leader. All other centerlines originate
-    // on it or on a child, so the pipe skin below can produce real junctions.
-    addBranch([0, 0, 0], [0, 1, 0], height * .31, .31, depthMax, random() * 2);
+    // Start with one continuous trunk/leader. All later limbs originate at
+    // shared graph nodes rather than floating inside an existing segment.
+    const rootNodeId = addNode([0, 0, 0], [0, 1, 0], .31);
+    addBranch(rootNodeId, [0, 1, 0], height * .31, .31, depthMax, random() * 2);
 
     // Add a crown of atlas-sampled leaf instances at every branch end. This is
     // intentionally CPU-side only at generation time; motion is GPU-side.
@@ -230,7 +166,7 @@
     const fallingIndexes = new Set(selectedFalling.map(({ index }) => index));
     const groundedLeaves = leaves.filter((leaf, index) => !fallingIndexes.has(index));
 
-    state.generated = { segments, leaves: groundedLeaves, allLeaves: leaves, falling, height, bark, barkLight, duration: 0 };
+    state.generated = { nodes, segments: edges, leaves: groundedLeaves, allLeaves: leaves, falling, height, bark, barkLight, duration: 0 };
     if (state.renderer) state.renderer.upload(state.generated);
     state.generated.duration = performance.now() - started;
     updateStats();
@@ -400,7 +336,7 @@
     if (!gl) return drawFallback();
     const branchProgram = makeProgram(gl, branchVertex, branchFragment), leafProgram = makeProgram(gl, leafVertex, leafFragment);
     if (!branchProgram || !leafProgram) return drawFallback();
-    const renderer = { gl, branchProgram, leafProgram, branchVao: gl.createVertexArray(), leafVao: gl.createVertexArray(), fallingVao: gl.createVertexArray(), branchBuffer: gl.createBuffer(), branchIndex: gl.createBuffer(), leafBuffer: gl.createBuffer(), leafSourceBuffer: gl.createBuffer(), fallingSourceBuffer: gl.createBuffer(), texture: gl.createTexture(), branchIndexCount: 0, leafCount: 0, fallingCount: 0 };
+    const renderer = { gl, branchProgram, leafProgram, branchVao: gl.createVertexArray(), leafVao: gl.createVertexArray(), fallingVao: gl.createVertexArray(), branchBuffer: gl.createBuffer(), branchIndex: gl.createBuffer(), branchLineIndex: gl.createBuffer(), leafBuffer: gl.createBuffer(), leafSourceBuffer: gl.createBuffer(), fallingSourceBuffer: gl.createBuffer(), texture: gl.createTexture(), branchIndexCount: 0, branchLineIndexCount: 0, leafCount: 0, fallingCount: 0 };
 
     // Static quad. All per-leaf attributes live in a second instanced buffer.
     const quad = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, quad); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-.5, 0, .5, 0, -.5, 1, .5, 1]), gl.STATIC_DRAW);
@@ -428,9 +364,9 @@
       renderer.leafCount = staticLeaves.length; renderer.fallingCount = data.falling.length;
     };
     renderer.upload = (data) => {
-      // One signed-distance surface for the full skeleton: no object-per-branch
-      // seams, no overlapping caps, and actual shared topology at junctions.
-      const mesh = pipeSkinMesh(data.segments, data.bark, data.barkLight);
+      // One endpoint graph becomes one indexed quad-ring skin: no object-per-
+      // branch seams, no cylinders embedded inside the parent, shared junction rings.
+      const mesh = quadPipeMesh(data.nodes, data.segments, data.bark, data.barkLight);
       const branchData = mesh.vertices, indexData = mesh.indices;
       gl.bindVertexArray(renderer.branchVao);
       gl.bindBuffer(gl.ARRAY_BUFFER, renderer.branchBuffer); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(branchData), gl.STATIC_DRAW);
@@ -438,7 +374,8 @@
       gl.enableVertexAttribArray(1); gl.vertexAttribPointer(1, 3, gl.FLOAT, false, 36, 12);
       gl.enableVertexAttribArray(2); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 36, 24);
       gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, renderer.branchIndex); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(indexData), gl.STATIC_DRAW);
-      renderer.branchIndexCount = indexData.length;
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, renderer.branchLineIndex); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint32Array(mesh.lineIndices), gl.STATIC_DRAW);
+      renderer.branchIndexCount = indexData.length; renderer.branchLineIndexCount = mesh.lineIndices.length;
       gl.bindVertexArray(null);
       renderer.uploadLeaves(data);
     };
@@ -460,8 +397,8 @@
       const camera = lookAt(eye, target), projection = perspective(Math.PI / 4.3, width / height, .05, 80);
       const wind = Number(els.wind.value) / 100;
       gl.enable(gl.DEPTH_TEST); gl.depthFunc(gl.LEQUAL); gl.disable(gl.CULL_FACE); gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-      gl.useProgram(branchProgram); gl.uniformMatrix4fv(gl.getUniformLocation(branchProgram, 'u_projection'), false, projection); gl.uniformMatrix4fv(gl.getUniformLocation(branchProgram, 'u_view'), false, camera.matrix); gl.uniform1f(gl.getUniformLocation(branchProgram, 'u_wire'), 0); gl.bindVertexArray(renderer.branchVao); gl.drawElements(gl.TRIANGLES, renderer.branchIndexCount, gl.UNSIGNED_INT, 0);
-      if (state.showTopology) { gl.uniform1f(gl.getUniformLocation(branchProgram, 'u_wire'), 1); gl.depthMask(false); gl.drawElements(gl.LINES, renderer.branchIndexCount, gl.UNSIGNED_INT, 0); gl.depthMask(true); }
+      gl.useProgram(branchProgram); gl.uniformMatrix4fv(gl.getUniformLocation(branchProgram, 'u_projection'), false, projection); gl.uniformMatrix4fv(gl.getUniformLocation(branchProgram, 'u_view'), false, camera.matrix); gl.uniform1f(gl.getUniformLocation(branchProgram, 'u_wire'), 0); gl.bindVertexArray(renderer.branchVao); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, renderer.branchIndex); gl.drawElements(gl.TRIANGLES, renderer.branchIndexCount, gl.UNSIGNED_INT, 0);
+      if (state.showTopology) { gl.uniform1f(gl.getUniformLocation(branchProgram, 'u_wire'), 1); gl.depthMask(false); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, renderer.branchLineIndex); gl.drawElements(gl.LINES, renderer.branchLineIndexCount, gl.UNSIGNED_INT, 0); gl.depthMask(true); }
       gl.useProgram(leafProgram); gl.uniformMatrix4fv(gl.getUniformLocation(leafProgram, 'u_projection'), false, projection); gl.uniformMatrix4fv(gl.getUniformLocation(leafProgram, 'u_view'), false, camera.matrix); gl.uniform3fv(gl.getUniformLocation(leafProgram, 'u_camRight'), camera.right); gl.uniform3fv(gl.getUniformLocation(leafProgram, 'u_camUp'), camera.up); gl.uniform1f(gl.getUniformLocation(leafProgram, 'u_time'), time); gl.uniform1f(gl.getUniformLocation(leafProgram, 'u_wind'), wind); gl.uniform1f(gl.getUniformLocation(leafProgram, 'u_height'), state.generated.height); gl.uniform1f(gl.getUniformLocation(leafProgram, 'u_falling'), 0); gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, renderer.texture); gl.uniform1i(gl.getUniformLocation(leafProgram, 'u_atlas'), 0); gl.depthMask(false); gl.bindVertexArray(renderer.leafVao); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, renderer.leafCount);
       if (els.falling.checked && renderer.fallingCount) { gl.uniform1f(gl.getUniformLocation(leafProgram, 'u_falling'), 1); gl.bindVertexArray(renderer.fallingVao); gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, renderer.fallingCount); }
       gl.depthMask(true); gl.bindVertexArray(null);
@@ -476,7 +413,7 @@
       const rect = els.canvas.getBoundingClientRect(), dpr = Math.min(window.devicePixelRatio || 1, 2); els.canvas.width = rect.width * dpr; els.canvas.height = rect.height * dpr; ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, rect.width, rect.height);
       if (!state.generated) return;
       const scaleY = rect.height / (state.generated.height * 1.35), cx = rect.width / 2;
-      ctx.lineCap = 'round'; state.generated.segments.forEach(s => { ctx.beginPath(); ctx.moveTo(cx + s.a[0] * 50, rect.height - 58 - s.a[1] * scaleY); ctx.lineTo(cx + s.b[0] * 50, rect.height - 58 - s.b[1] * scaleY); ctx.strokeStyle = '#79543a'; ctx.lineWidth = Math.max(1, s.r1 * 22); ctx.stroke(); });
+      ctx.lineCap = 'round'; state.generated.segments.forEach(s => { const a = state.generated.nodes[s.a].position, b = state.generated.nodes[s.b].position; ctx.beginPath(); ctx.moveTo(cx + a[0] * 50, rect.height - 58 - a[1] * scaleY); ctx.lineTo(cx + b[0] * 50, rect.height - 58 - b[1] * scaleY); ctx.strokeStyle = '#79543a'; ctx.lineWidth = Math.max(1, s.r1 * 22); ctx.stroke(); });
       const fallbackLeaves = els.falling.checked ? state.generated.leaves : state.generated.allLeaves;
       fallbackLeaves.forEach(l => { ctx.save(); ctx.translate(cx + l.position[0] * 50, rect.height - 58 - l.position[1] * scaleY); ctx.rotate(l.angle); ctx.fillStyle = '#71975b'; ctx.beginPath(); ctx.ellipse(0, 0, l.size * 24, l.size * 38, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore(); });
     }; state.renderer = { upload: () => {}, updateTexture: () => {}, render: render }; return state.renderer;
