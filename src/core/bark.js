@@ -65,6 +65,7 @@ export const BARK_DEFAULTS = {
   grain: 0.22,           // fine fibrous noise, fraction of furrow depth
   warp: 0.35,            // organic wander of the fissures, in ridge widths
   plateShift: 0.15,      // how much of the simulated plate separation to keep
+  coverage: 0.5,         // fraction of the trunk height to bark (small = fast)
   minRadiusRatio: 0.42,  // bark stops where the stem is this fraction of the trunk
   barkSeed: 11,          // NOT `seed`: that one belongs to the tree
 };
@@ -661,16 +662,19 @@ function valueNoise(p, f) {
  */
 export function growBark(mesh, skel, opts = {}) {
   const O = { ...BARK_DEFAULTS, ...opts };
+  const log = O.log || (() => {});
   // a V-groove needs ~4 quads across it, so the mesh has to resolve ridge/10
   if (!O.barkResolution) O.barkResolution = O.ridgeWidth / 10;
   const t0 = Date.now();
 
   const { path, inPath } = trunkPath(skel, O.minRadiusRatio);
+  log(`trunk: ${path.length} skeleton vertices`);
   if (path.length < 2) return { mesh, stats: { skipped: 'no trunk' } };
   const fr = trunkFrames(skel, path);
 
   // ---- 1. select + refine the trunk region
   let sel = selectTrunkFaces(mesh, skel, inPath, fr, O);
+  log(`selected ${sel.size} trunk faces of ${mesh.faces.length} (coverage ${O.coverage})`);
   if (!sel.size) return { mesh, stats: { skipped: 'no trunk faces' } };
 
   // refine until the quads on the trunk are about `barkResolution` across.
@@ -698,6 +702,7 @@ export function growBark(mesh, skel, opts = {}) {
     work = expandSelection(out, r.selection, 1);
     levels++;
     sel = selectTrunkFaces(out, skel, inPath, fr, O);
+    log(`refine level ${levels}: ${out.faces.length} faces total, ${sel.size} in the bark patch`);
   }
   let faces = sel;
   // The fissure spacing must be something the mesh can actually resolve. A
@@ -727,6 +732,7 @@ export function growBark(mesh, skel, opts = {}) {
 
   // ---- 2. fracture simulation on the unrolled trunk
   const field = fractureLattice2D(fr, O);
+  log(`fracture: ${field.segs.length} fissure segments on a ${field.rows}x${field.cols} lattice`);
   const halfW = O.furrowWidth * O.ridgeWidth;
   const searchR = O.ridgeWidth * 1.6;
   const index = buildSegmentIndex(field, Math.max(searchR, field.spacing));

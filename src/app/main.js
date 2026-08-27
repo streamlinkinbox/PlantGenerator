@@ -4,6 +4,9 @@ addEventListener('error', (e) => {
   if (hud) hud.textContent = `error: ${e.message}`;
 });
 
+const BUILD = '14:42:53';
+console.log('%cPlantGenerator build ' + BUILD, 'color:#38e2a8;font-weight:bold');
+
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { generateSkeleton, DEFAULTS, orderByGrowth, skeletonStats } from '../core/skeleton.js';
@@ -59,6 +62,7 @@ const barkSpec = [
   ['fibreStrength', 0, 8, 0.1],
   ['grain', 0, 0.8, 0.02],
   ['warp', 0, 1.2, 0.05],
+  ['coverage', 0.15, 1.0, 0.05],
   ['minRadiusRatio', 0.1, 0.9, 0.02],
   ['barkMaxLevels', 2, 6, 1],
 ];
@@ -365,11 +369,20 @@ function buildBark() {
   // let the HUD paint before the (synchronous) heavy work
   requestAnimationFrame(() => {
     const t0 = performance.now();
+    console.group('%cgrowBark', 'color:#ffb454');
+    console.log('base mesh (cage):', cage.faces.length, 'quads');
     // Feed the CAGE, not the subdivided skin: growBark refines the trunk
     // locally, and starting from an already-subdivided mesh just spends the
     // face budget on the rest of the tree - the trunk then ends up too coarse
     // to resolve a furrow and the relief aliases away.
-    const res = growBark(cage, skel, { ...params, barkMaxLevels: Math.round(params.barkMaxLevels) });
+    const res = growBark(cage, skel, {
+      ...params,
+      barkMaxLevels: Math.round(params.barkMaxLevels),
+      log: (m) => console.log(m),
+    });
+    console.log('stats:', res.stats);
+    console.log('topology:', res.mesh.validate());
+    console.groupEnd();
     bark = res.mesh;
     barkStats = { ...res.stats, totalMs: performance.now() - t0 };
     if (objBark) { objBark.geometry.dispose(); skinGroup.remove(objBark); }
@@ -505,14 +518,15 @@ function applyStage() {
   objBones.visible = stage <= 1 || keepSkel;
   matBones.opacity = stage === 0 ? 0.35 : 0.9;
 
-  document.getElementById('hud').textContent =
+  const label =
     ['vertices — live: sliders rebuild only the point cloud',
      'bones — the vertices connected into limbs',
      'hub boxes — a box fitted at every fork',
      'quad cage — boxes extruded + tubes stitched (1 shell)',
      'skin — Catmull-Clark of that same all-quad cage',
-     'bark — trunk refined locally, growth-fracture pattern carved in'][stage] +
-    '\ndrag to orbit · scroll to zoom';
+     'bark — trunk refined locally, growth-fracture pattern carved in'][stage] ??
+    `stage ${stage} (stale bundle? hard-reload)`;
+  document.getElementById('hud').textContent = `${label}\ndrag to orbit · scroll to zoom`;
 }
 
 // ---------------------------------------------------------------- loop

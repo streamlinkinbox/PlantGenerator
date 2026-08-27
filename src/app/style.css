@@ -32,6 +32,8 @@ canvas { display: block; }
 #panel header h1 { font-size: 17px; margin: 0; letter-spacing: .3px; font-weight: 650; }
 #panel header h1 span { color: var(--acc); }
 .sub { color: var(--dim); font-size: 11px; margin: 4px 0 0; }
+.sub.build { color: #55627a; font-size: 10px; }
+.sub.build b { color: var(--acc); }
 section { margin-top: 18px; border-top: 1px solid var(--line); padding-top: 12px; }
 section.foot { border-top: 1px solid var(--line); }
 h2 .tag { float: right; text-transform: none; letter-spacing: 0; color: #55627a; font-size: 10px; }
