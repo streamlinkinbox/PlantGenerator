@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Procedural bark as real geometry — research</title>
+<style>
+  :root{--bg:#0e1116;--panel:#151a22;--line:#242c38;--txt:#dbe2ec;--dim:#8b97a8;--acc:#38e2a8;--warn:#ff6b6b;--amber:#ffb454}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.65 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  .wrap{max-width:940px;margin:0 auto;padding:48px 24px 96px}
+  h1{font-size:30px;line-height:1.2;margin:0 0 6px}
+  h2{font-size:21px;margin:52px 0 12px;padding-top:18px;border-top:1px solid var(--line)}
+  h3{font-size:16px;margin:28px 0 8px;color:var(--acc)}
+  p,li{color:#c8d2df}
+  .lede{color:var(--dim);font-size:16px;margin:0 0 8px}
+  code,kbd{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;background:#1b222c;padding:1px 5px;border-radius:4px}
+  pre{background:#11161d;border:1px solid var(--line);border-radius:8px;padding:14px 16px;overflow-x:auto}
+  pre code{background:none;padding:0;font-size:12.5px;line-height:1.55}
+  .box{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px;margin:18px 0}
+  .box.bad{border-color:#5a2b2b;background:#1c1416}
+  .box.good{border-color:#215043;background:#101c19}
+  .box h4{margin:0 0 8px;font-size:14px;letter-spacing:.4px;text-transform:uppercase;color:var(--dim)}
+  table{width:100%;border-collapse:collapse;margin:16px 0;font-size:14px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--dim);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.6px}
+  a{color:var(--acc)}
+  .ref{font-size:13.5px;color:#b6c2d1}
+  .ref b{color:var(--txt);font-weight:600}
+  ol.refs li{margin-bottom:10px}
+  figure{margin:22px 0}
+  figcaption{color:var(--dim);font-size:13px;margin-top:8px}
+  .tag{display:inline-block;font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:#0e1116;background:var(--acc);border-radius:4px;padding:2px 7px;vertical-align:middle}
+  .tag.no{background:var(--warn)}
+  .tag.mid{background:var(--amber)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:760px){.grid2{grid-template-columns:1fr}}
+  .kv{display:grid;grid-template-columns:190px 1fr;gap:4px 14px;font-size:14px}
+  .kv div:nth-child(odd){color:var(--dim)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Procedural bark as real geometry</h1>
+<p class="lede">Research note — why my two attempts failed by construction, what the literature says bark actually is, and the architecture that produces one separate mesh per piece of bark. PlantGenerator, background document.</p>
+
+<h2>1. What I got wrong, precisely</h2>
+
+<div class="box bad">
+<h4>The error</h4>
+<p>Both attempts represented bark as a <b>height field</b>: a single continuous surface whose vertices were pushed along their normals. Attempt&nbsp;1 displaced the trunk skin; attempt&nbsp;2 displaced a flat grid. The fracture simulation underneath was reasonable — the failure was in the <b>primitive</b>, and no amount of parameter tuning could fix it.</p>
+</div>
+
+<p>A displaced surface cannot express any of the four features that define plated bark:</p>
+
+<table>
+  <tr><th>Feature of real bark</th><th>Height field</th><th>Why</th></tr>
+  <tr><td>Separate pieces</td><td><span class="tag no">impossible</span></td><td>One connected surface. Two "scales" are always joined by the material in the groove between them.</td></tr>
+  <tr><td>A gap you can see into</td><td><span class="tag no">impossible</span></td><td>A groove has a floor. A real fissure is a <i>void</i> between two solids that reaches down to the layer beneath.</td></tr>
+  <tr><td>Thickness / an exposed edge</td><td><span class="tag no">impossible</span></td><td>A surface has no thickness. A scale is a slab with a visible broken edge several millimetres thick.</td></tr>
+  <tr><td>Lifted, curling, shedding edges</td><td><span class="tag no">impossible</span></td><td>Overhangs are not functions of the base surface — a height field is single-valued by definition.</td></tr>
+</table>
+
+<p>So the honest summary of the last two rounds: the pattern generator was worth keeping, the geometry stage was categorically wrong. Bark is <b>a thick shell that has been broken into pieces</b>, and it has to be modelled as solids, not as relief.</p>
+
+<figure>
+<svg viewBox="0 0 880 210" width="100%" height="210" role="img" aria-label="Height field versus fractured shell">
+  <rect width="880" height="210" fill="#11161d" rx="8"/>
+  <text x="24" y="28" fill="#8b97a8" font-size="13" font-family="monospace">HEIGHT FIELD (what I built)</text>
+  <text x="470" y="28" fill="#8b97a8" font-size="13" font-family="monospace">FRACTURED SHELL (what bark is)</text>
+  <path d="M24,150 C70,150 74,96 96,96 C118,96 122,150 150,150 C178,150 182,92 206,92 C230,92 234,150 262,150 C290,150 296,100 320,100 C344,100 348,150 400,150"
+        fill="none" stroke="#6f7f96" stroke-width="3"/>
+  <text x="24" y="176" fill="#ff6b6b" font-size="12" font-family="monospace">one surface · no gap · no thickness · no overhang</text>
+  <line x1="430" y1="40" x2="430" y2="180" stroke="#242c38"/>
+  <rect x="470" y="150" width="380" height="26" fill="#2a2118" stroke="#3a2f22"/>
+  <text x="474" y="192" fill="#8b97a8" font-size="11" font-family="monospace">substrate (living bark / cambium)</text>
+  
+  <path d="M474,150 L474,116 Q476,104 492,102 L534,100 Q548,101 550,114 L552,150 Z" fill="#9aa6b6" stroke="#6f7f96"/>
+  <path d="M562,150 L560,112 Q562,100 578,99 L636,100 Q650,103 650,116 L650,150 Z" fill="#8f9caa" stroke="#6f7f96"/>
+  <path d="M662,150 L660,120 Q664,106 682,104 L722,104 Q736,107 734,120 L732,150 Z" fill="#a3aebd" stroke="#6f7f96"/>
+  <path d="M748,150 L746,118 Q750,104 768,103 L820,104 Q834,108 832,122 L830,150 Z" fill="#95a2b1" stroke="#6f7f96"/>
+  <text x="470" y="72" fill="#38e2a8" font-size="12" font-family="monospace">separate solids · real gaps · thickness · lifted edges</text>
+</svg>
+<figcaption>Left: a displaced surface — the groove always has a floor and the "pieces" are one mesh. Right: a shell of finite thickness fragmented into individual closed solids sitting on a substrate, which is what the photographs show.</figcaption>
+</figure>
+
+<h2>2. What bark is, physically</h2>
+
+<p>The outer bark (<i>rhytidome</i>) is dead, rigid, and of substantial thickness. The cambium keeps adding wood, the stem's girth grows, and the rhytidome cannot grow with it — it goes into tangential tension and fractures through its <b>full thickness</b>. New periderms form underneath, so the rhytidome is a <b>stack of layers</b>; scales detach along those planes and expose fresher tissue below, which is what the pale patches in the reference photographs are <span class="ref">[6][7]</span>.</p>
+
+<h3>Numbers worth designing against</h3>
+<div class="kv">
+  <div>Relative bark thickness</div><div>3.5–20&nbsp;% of stem diameter for spruce/beech/oak; up to 27&nbsp;% for oak <span class="ref">[8]</span>. 15–26&nbsp;% of stem <i>radius</i> across savanna/pocosin species <span class="ref">[9]</span>. Pine bark 17–20&nbsp;% of stem volume <span class="ref">[10]</span>.</div>
+  <div>Thickness vs. diameter</div><div>Grows sub-linearly: allometric exponent ≈ 0.74 (range 0.38–1.20) — big stems invest relatively less <span class="ref">[9]</span>.</div>
+  <div>Fragment size</div><div>Cracking saturates when cells reach a size proportional to the <b>layer thickness</b>; past that, more stress widens existing cracks instead of making new ones <span class="ref">[2]</span>.</div>
+  <div>Curvature effect</div><div>On curved substrates, larger curvature radius → smaller fragments and more edges per fragment (scaling law from peridynamic simulation + experiment) <span class="ref">[13]</span>.</div>
+</div>
+
+<p>The consequence for modelling: bark thickness is not a decorative parameter. It <b>sets the plate size</b>, and it is 5–20&nbsp;% of the stem radius — on a 30&nbsp;cm-radius trunk that is 1.5–6&nbsp;cm of real, visible slab edge.</p>
+
+<h2>3. The literature, and which parts are usable</h2>
+
+<h3>3.1 Bi-layer fracture simulation — the pattern</h3>
+<p>Federl &amp; Prusinkiewicz model bark as a rigid layer bonded to a growing substrate, discretised first as a mass-spring lattice and later with wedge finite elements on a growing surface <span class="ref">[3][4][5]</span>. Dale, Runions, Hobill &amp; Prusinkiewicz use the same formulation for grasstree bark <span class="ref">[11]</span>. These produce crack <b>networks</b> with the right statistics; they do not, by themselves, produce per-piece geometry.</p>
+
+<h3>3.2 Hierarchical crack networks — the statistics to hit</h3>
+<p>Cracks form <b>sequentially</b>: a new crack nucleates in the largest remaining domain and curves to meet an older crack at a right angle, because that maximises its energy release rate. The signature is <b>T-junctions</b>, curved edges, and a narrow cell-size distribution <span class="ref">[1][2][12]</span>. Y-junction (120°) networks are a <i>different</i>, more mature regime produced by repeated crack/heal cycles — mud in Death Valley, columnar basalt — not fresh bark <span class="ref">[2]</span>.</p>
+<div class="box">
+<h4>Directly relevant benchmark</h4>
+<p>An algorithms paper compares random homogeneous tessellation, recursive Voronoi and a crack-growth simulation against image analysis of real hierarchical crack patterns <span class="ref">[14]</span>. Verdict: tessellations <b>inherently fail</b> — "the cracks are strictly linear, whereas in real-world systems they are curved"; "an absence of T-junctions"; "the cells vary greatly in size, which is not typical". Only the crack-growth simulation reproduces the real angle, size, side-count and circularity distributions.</p>
+<p style="margin-bottom:0"><b>So: no Voronoi shattering.</b> That rules out the standard VFX approach for this material, even though it is the easy one.</p>
+</div>
+
+<h3>3.3 Lefebvre &amp; Neyret, <i>Synthesizing Bark</i> — the closest prior art</h3>
+<p>The one paper that targets exactly this problem and outputs geometry <span class="ref">[15]</span>. Their model:</p>
+<ul>
+  <li>bark is represented as <b>circular strips</b> around the trunk, transverse to the growth direction;</li>
+  <li>each strip alternates <b>quasi-rigid epidermal elements</b> with <b>soft fracture elements</b>. When the bark breaks, a new fracture element is <i>inserted between the tear edges</i>, splitting the epidermal element in two;</li>
+  <li>subsequent growth <b>widens</b> those fracture elements — the tear opens as the tree grows;</li>
+  <li>fractures propagate from strip to strip in world space, so they cross branch junctions correctly;</li>
+  <li>finally the fracture silhouettes are reconstructed and <b>meshed</b> (constrained Delaunay), with the tear interiors as their own surfaces.</li>
+</ul>
+<p>The important idea I did not use: <b>the fissure is an explicit element with its own width and its own geometry</b>, not the low part of a displacement curve. Their epidermal elements are the ancestors of "pieces". Their reported limitation is that everything is driven by 1D strips, which suits furrowed bark better than tessellated plates.</p>
+
+<h3>3.4 Film–substrate fracture with debonding — why plates lift and shed</h3>
+<p>The modern mechanics literature models exactly the configuration we have — a stiff film on an expanding curved substrate — with <b>interfacial cohesive peridynamics</b>, and crucially couples <b>film cracking with interfacial debonding</b> <span class="ref">[13][16][17][18]</span>. Findings that matter here:</p>
+<ul>
+  <li>three fragmentation regimes: cracking with perfect bonding; cracking with minor interfacial damage; <b>debonding-dominated</b> — which is the regime where plates lift and shed <span class="ref">[17]</span>;</li>
+  <li>fragment size and edge count scale with substrate curvature radius <span class="ref">[13]</span>;</li>
+  <li>the same framework reproduces crocodile, elephant and rhino skin patterning <span class="ref">[18]</span> — the shared mechanism with bark is not a coincidence.</li>
+</ul>
+<p>I do not propose running peridynamics. I propose taking its <b>state variables</b>: per-piece bond state (bonded / partially debonded / shed), because that is the switch that turns a flat mosaic into bark with lifted, curling, missing scales.</p>
+
+<h3>3.5 Fracture-to-mesh practice</h3>
+<p>Voronoi cell fracture is normally implemented as clipping a convex solid against the bisector half-space of every rival seed; each shard stays closed, and the useful part is the <b>validation discipline</b>: every shard closed (each edge used by exactly two faces), piece volumes summing to the original, no piece claimed by the wrong seed <span class="ref">[19]</span>. Concave input needs a real CSG kernel. We can avoid general CSG entirely — see below.</p>
+
+<h2>4. Proposed architecture</h2>
+
+<p>Five stages. The output is the trunk skin as one manifold mesh, plus <b>N separate closed solids</b>, one per piece of bark.</p>
+
+<figure>
+<svg viewBox="0 0 880 240" width="100%" height="240" role="img" aria-label="Pipeline">
+  <rect width="880" height="240" fill="#11161d" rx="8"/>
+  <g font-family="monospace" font-size="11.5" fill="#c8d2df">
+    <rect x="20" y="40" width="150" height="86" rx="6" fill="#161d26" stroke="#2b3644"/>
+    <text x="32" y="62" fill="#38e2a8">1 · shell</text>
+    <text x="32" y="82">offset the skin</text>
+    <text x="32" y="98">outward by t(z)</text>
+    <text x="32" y="114">inner + outer</text>
+
+    <rect x="192" y="40" width="150" height="86" rx="6" fill="#161d26" stroke="#2b3644"/>
+    <text x="204" y="62" fill="#38e2a8">2 · network</text>
+    <text x="204" y="82">crack growth in</text>
+    <text x="204" y="98">unrolled (θ,s)</text>
+    <text x="204" y="114">T-junctions</text>
+
+    <rect x="364" y="40" width="150" height="86" rx="6" fill="#161d26" stroke="#2b3644"/>
+    <text x="376" y="62" fill="#38e2a8">3 · pieces</text>
+    <text x="376" y="82">inset each cell,</text>
+    <text x="376" y="98">loft inner→outer,</text>
+    <text x="376" y="114">close the walls</text>
+
+    <rect x="536" y="40" width="150" height="86" rx="6" fill="#161d26" stroke="#2b3644"/>
+    <text x="548" y="62" fill="#38e2a8">4 · bond state</text>
+    <text x="548" y="82">bonded / lifted /</text>
+    <text x="548" y="98">shed per piece</text>
+    <text x="548" y="114">(debonding)</text>
+
+    <rect x="708" y="40" width="152" height="86" rx="6" fill="#161d26" stroke="#2b3644"/>
+    <text x="720" y="62" fill="#38e2a8">5 · layers</text>
+    <text x="720" y="82">repeat for the</text>
+    <text x="720" y="98">periderm below,</text>
+    <text x="720" y="114">exposed by shed</text>
+
+    <path d="M170,83 L192,83 M342,83 L364,83 M514,83 L536,83 M686,83 L708,83" stroke="#38e2a8" stroke-width="1.5" marker-end="url(#a)"/>
+    <text x="20" y="170" fill="#8b97a8">output: trunk skin (1 manifold mesh)  +  N closed all-quad solids, one per scale</text>
+    <text x="20" y="192" fill="#8b97a8">every stage is checkable: junction stats · piece closure · volume · interpenetration</text>
+  </g>
+  <defs><marker id="a" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6" fill="#38e2a8"/></marker></defs>
+</svg>
+</figure>
+
+<h3>Stage 1 — build the bark shell</h3>
+<p>Offset the existing trunk skin outward by a thickness <code>t(z)</code> taken from the allometry in §2 (5–20&nbsp;% of local radius, sub-linear in diameter). This gives an inner surface (the substrate, where bark meets living tissue) and an outer surface. The shell between them is the material that will be broken. No CSG needed: both surfaces share the trunk's own quad parameterisation.</p>
+
+<h3>Stage 2 — the crack network</h3>
+<p>Crack-growth simulation in the unrolled (θ, arc-length) domain, as in §3.2: pick the largest remaining domain, start a crack on its boundary, meander across it, turn to terminate perpendicular on an older crack, split, repeat until cells reach the size set by shell thickness. Keep the <b>vector</b> network — a planar graph of curved edges — not a raster. Anisotropy of the domain-splitting rule gives species character (elongated pine plates vs. isotropic plane-tree scales).</p>
+<pre><code>while (domain = largest cell with area &gt; k · t²):
+    p0   = point on domain boundary, biased across its long axis
+    path = grow(p0, meander, steer_towards_perpendicular_on_approach)
+    if path ends on an existing crack and both halves are substantial:
+        split domain into two cells, record the crack polyline
+</code></pre>
+
+<h3>Stage 3 — one solid per piece <span class="tag">the part that was missing</span></h3>
+<p>For each cell of the network:</p>
+<ol>
+  <li><b>Inset</b> the cell polygon by half the fissure width. The inset is what creates a real gap between neighbouring pieces — the fissure is a void, not a groove.</li>
+  <li><b>Lift the inset polygon</b> to the outer surface and <b>project a copy</b> to the inner surface.</li>
+  <li><b>Loft</b> between them to make side walls. Give the walls a slight inward taper (pieces are wedges, wider at the top on old bark) and round the top edge — a broken bark edge is eroded, not a knife edge.</li>
+  <li>Quad-mesh the top face by clipping a regular grid to the polygon and stitching a boundary ring, so the piece stays all-quad and matches the rest of the project's topology rules.</li>
+  <li>Result: a <b>closed, manifold, all-quad solid</b>. Separate object. Exportable on its own.</li>
+</ol>
+
+<h3>Stage 4 — bond state: bonded, lifted, shed</h3>
+<p>From the debonding literature (§3.4), give each piece an interfacial state:</p>
+<table>
+  <tr><th>State</th><th>Geometry</th><th>Reads as</th></tr>
+  <tr><td>bonded</td><td>sits flush on the inner surface</td><td>tight plate</td></tr>
+  <tr><td>partially debonded</td><td>one edge rotated outward about the opposite edge; the gap under it is real</td><td>a scale about to fall off — <b>the overhang a height field cannot do</b></td></tr>
+  <tr><td>shed</td><td>piece deleted; the layer beneath is exposed</td><td>the pale scars in the reference photos</td></tr>
+</table>
+
+<h3>Stage 5 — layered rhytidome</h3>
+<p>Repeat stages 1–4 for a second (and optionally third) shell underneath, each with its own independent crack network and its own thickness. Shedding a piece in the outer layer reveals intact pieces of the layer below — which is why real exfoliating bark reads as depth rather than as a pattern.</p>
+
+<h2>5. How it will be judged</h2>
+<p>Numbers, not opinion. The previous rounds went wrong partly because "does it look right" was the only test.</p>
+<table>
+  <tr><th>Property</th><th>Target</th><th>Source</th></tr>
+  <tr><td>Junction mix</td><td>T &gt; 60 %, Y &lt; 15 %</td><td>hierarchical sequential fracture <span class="ref">[1][12][14]</span></td></tr>
+  <tr><td>Cell sides</td><td>mostly 4–7</td><td><span class="ref">[14]</span></td></tr>
+  <tr><td>Cell size spread</td><td>narrow, unimodal (not Voronoi-wide)</td><td><span class="ref">[14]</span></td></tr>
+  <tr><td>Plate size vs. thickness</td><td>ℓ ≈ 2–4 · t</td><td>saturation at a size ∝ layer depth <span class="ref">[2]</span></td></tr>
+  <tr><td>Shell thickness</td><td>5–20 % of local stem radius</td><td><span class="ref">[8][9][10]</span></td></tr>
+  <tr><td>Per piece</td><td>closed, manifold, all-quad, no self-intersection</td><td>project rule + <span class="ref">[19]</span></td></tr>
+  <tr><td>Between pieces</td><td>no interpenetration; visible gap at grazing angles</td><td>it is a void, not a groove</td></tr>
+</table>
+
+<h2>6. Cost, and what is genuinely hard</h2>
+<div class="grid2">
+  <div class="box">
+    <h4>Budget</h4>
+    <p>A 6 m trunk, 0.6 m diameter, 8 cm plates ≈ <b>1 500–3 000 pieces</b>. At ~200 quads each (top grid + walls) that is 300–600 k quads for the trunk's bark — comparable to what the tree already handles, and each piece is independent, so LOD is trivial: distant trunks get fewer, larger pieces or fall back to the plain skin.</p>
+  </div>
+  <div class="box">
+    <h4>Hard parts, honestly</h4>
+    <p><b>Inset of a concave polygon</b> self-intersects on thin necks — needs a straight-skeleton or a clipped-offset with collapse handling. <b>Curvature</b>: pieces are built in the unrolled domain and mapped back, so a piece spanning a strongly curved region must be re-fitted or subdivided. <b>Branch junctions</b>: the unrolled parameterisation breaks down at forks — Lefebvre &amp; Neyret solved propagation there by working in world space <span class="ref">[15]</span>, and that is the approach to copy.</p>
+  </div>
+</div>
+
+<h2>7. What I am asking before writing code</h2>
+<p>Three decisions change the architecture, and I would rather have them from you than guess a fourth time:</p>
+<ol>
+  <li><b>Pieces as separate objects, or welded into one mesh?</b> Separate is what you asked for and is better for shedding/simulation; a single merged mesh is easier to export as one object. Both are producible — it is one flag.</li>
+  <li><b>Which bark type first?</b> The two photographs are different families: irregular polygonal scales (plane/pine plates) vs. vertically elongated blocky plates. Same machinery, different anisotropy and shed rate.</li>
+  <li><b>Flat test area again, or straight onto the trunk?</b> A flat patch iterates in seconds and isolates the piece geometry from the curvature problems; the trunk is the real target.</li>
+</ol>
+
+<h2>References</h2>
+<ol class="refs">
+<li class="ref"><b>Bohn, Pauchard &amp; Couder</b> — <i>Hierarchical crack pattern as formed by successive domain divisions</i>, Phys. Rev. E 71 (2005). <a href="https://www.researchgate.net/publication/235540544_Hierarchical_crack_pattern_as_formed_by_successive_domain_divisions_I_Temporal_and_geometrical_hierarchy">link</a></li>
+<li class="ref"><b>Goehring &amp; Morris</b> — <i>Cracking mud, freezing dirt, and breaking rocks</i>, Physics Today 67(11) (2014). Later cracks curve to hit earlier ones at right angles; cell size ∝ layer depth. <a href="https://physicstoday.aip.org/features/cracking-mud-freezing-dirt-and-breaking-rocks">link</a></li>
+<li class="ref"><b>Federl &amp; Prusinkiewicz</b> — <i>A texture model for cracked surfaces, with an application to tree bark</i>, WCGS (1996).</li>
+<li class="ref"><b>Federl &amp; Prusinkiewicz</b> — <i>Modelling fracture formation in bi-layered materials, with applications to tree bark and drying mud</i>, WCGS (2002). <a href="https://www.researchgate.net/publication/277287672_Modelling_fracture_formation_in_bi-layered_materials_with_applications_to_tree_bark_and_drying_mud">link</a></li>
+<li class="ref"><b>Federl &amp; Prusinkiewicz</b> — <i>Finite element model of fracture formation on growing surfaces</i>, ICCS, LNCS 3037 (2004).</li>
+<li class="ref"><b>Priorities for Bark Anatomical Research</b> (2023) — bark architectural types: stretched, exfoliating, furrowed, peeling; "scars of fallen scales". <a href="https://www.researchgate.net/publication/370766451_Priorities_for_Bark_Anatomical_Research_Study_Venues_and_Open_Questions">link</a></li>
+<li class="ref"><b>Macroscopic appearance and microscopic structure of bark in South African Meliaceae</b>, Trees (2025) — tessellate scaling, chunky scales, shedding along periderms. <a href="https://link.springer.com/article/10.1007/s00468-025-02661-7">link</a></li>
+<li class="ref"><b>Bark Biometry Along the Stem for Three Commercial Tree Species</b>, Forests 15(12):2264 (2024) — relative double bark thickness 3.5–20 % (spruce), to 27 % (oak). <a href="https://www.mdpi.com/1999-4907/15/12/2264">link</a></li>
+<li class="ref"><b>Relative Bark Thickness is Correlated with Tree Species Distributions Along a Fire Frequency Gradient</b> (2015) — bark thickness as % of stem radius; allometric exponent ≈ 0.74. <a href="https://www.researchgate.net/publication/277977710_Relative_Bark_Thickness_is_Correlated_with_Tree_Species_Distributions_Along_a_Fire_Frequency_Gradient">link</a></li>
+<li class="ref"><b>Bark volume percentages for <i>Pinus cooperi</i> / <i>P. durangensis</i></b> — 17.2 % and 19.8 % of stem volume. <a href="https://www.researchgate.net/figure/Observed-bark-thickness-and-percentage-of-bark-volume-for-the-diameter-classes-of-the_fig3_320793246">link</a></li>
+<li class="ref"><b>Dale, Runions, Hobill &amp; Prusinkiewicz</b> — <i>Modelling biomechanics of bark patterning in grasstrees</i>, Annals of Botany 114:629 (2014). <a href="https://algorithmicbotany.org/papers/modelling-biomechanics-of-bark.pdf">PDF</a></li>
+<li class="ref"><b>Decoding planetary surfaces by counting cracks</b>, PNAS 122 (2025) — T/X/Y junction ternary diagram; hierarchical networks are T-dominated. <a href="https://www.pnas.org/doi/10.1073/pnas.2411738122">link</a></li>
+<li class="ref"><b>Bioinspired Strategy for Controlling Crack Network Morphology on Curved Films</b>, Adv. Funct. Mater. (2025) — hierarchical shear-lag; curvature radius vs. fragment size scaling. <a href="https://advanced.onlinelibrary.wiley.com/doi/10.1002/adfm.202514054">link</a></li>
+<li class="ref"><b>Algorithms for generating planar networks simulating hierarchical patterns of cracks formed during film drying</b>, arXiv (2026) — tessellations vs. crack-growth simulation, measured against real patterns. <a href="https://arxiv.org/html/2603.24171">link</a></li>
+<li class="ref"><b>Lefebvre &amp; Neyret</b> — <i>Synthesizing Bark</i>, EGSR 2002. Strips of epidermal + fracture elements; fractures widen with growth; mesh reconstruction of fracture silhouettes. <a href="https://inria.hal.science/inria-00537488/file/bark.pdf">PDF</a> · <a href="http://www-evasion.imag.fr/Membres/Sylvain.Lefebvre/these/bark/">project page</a></li>
+<li class="ref"><b>Chu et al.</b> — <i>Peridynamic fracture analysis of film–substrate systems</i>, J. Mech. Phys. Solids 191:105757 (2024) — interfacial cohesive peridynamics, coupled cracking + debonding. <a href="https://www.sciencedirect.com/science/article/abs/pii/S0022509624002230">link</a></li>
+<li class="ref"><b>Film fragmentation on curved substrates</b>, Eng. Fracture Mechanics (2025) — three fragmentation modes incl. debonding-dominated. <a href="https://www.sciencedirect.com/science/article/abs/pii/S0013794425003091">link</a></li>
+<li class="ref"><b>Cracking and wrinkling morphomechanics of animal skins</b>, JMPS (2025) — same framework applied to crocodile/elephant/rhino skin. <a href="https://www.sciencedirect.com/science/article/abs/pii/S0022509625001437">link</a></li>
+<li class="ref"><b>Voronoi fragmentation of a mesh</b> — half-space clipping, and the closure/volume/ownership invariants worth copying for validation. <a href="https://www.4rknova.com/blog/2026/07/27/voronoi-fracture">link</a></li>
+<li class="ref"><b>Interactive Modeling of Tree Bark</b>, Pacific Graphics 2003 — bark feature taxonomy (fracture, tessellation, ironbark, furrowed cork, lenticel); notes that spring-based methods "cannot represent open fractures". <a href="https://cg.cs.tsinghua.edu.cn/papers/pg2003.pdf">PDF</a></li>
+</ol>
+
+</div>
+</body>
+</html>
