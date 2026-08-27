@@ -34,7 +34,7 @@
 //   all quads, one shell, watertight.
 
 import * as V from './vec3.js';
-import { refineRegion, regionMaxEdge, smoothRegion, expandSelection } from './refine.js';
+import { refineRegion, regionMaxEdge, regionMedianEdge, smoothRegion, expandSelection } from './refine.js';
 import { makeRng } from './rng.js';
 
 export const BARK_DEFAULTS = {
@@ -42,7 +42,7 @@ export const BARK_DEFAULTS = {
   barkMaxLevels: 5,      // cap on local refinement (each level also slices a
                          // band of the surrounding mesh - see README)
   faceBudget: 1500000,   // hard cap on total faces after refinement
-  autoRidge: 0,          // widen the ridges if the mesh cannot resolve them
+  autoRidge: 1,          // widen the ridges if the mesh cannot resolve them
   smoothPasses: 6,       // Laplacian passes that round the trunk before carving
   ridgeWidth: 0.09,      // mean ridge width (world units)
   growth: 1.6,           // MAX girth increase; growth stops once the pattern
@@ -66,7 +66,7 @@ export const BARK_DEFAULTS = {
   warp: 0.35,            // organic wander of the fissures, in ridge widths
   plateShift: 0.15,      // how much of the simulated plate separation to keep
   minRadiusRatio: 0.42,  // bark stops where the stem is this fraction of the trunk
-  seed: 11,
+  barkSeed: 11,          // NOT `seed`: that one belongs to the tree
 };
 
 /* ------------------------------------------------------------------ trunk */
@@ -220,7 +220,7 @@ function hoopExtent(mesh, faceSel, fr) {
  * decides whether the pattern is plain vertical fissures or reticulate.
  */
 function fractureLattice2D(fr, O) {
-  const rnd = makeRng(O.seed);
+  const rnd = makeRng(O.barkSeed ?? 11);
   // One lattice cell per ridge: the fissure network lives on cell edges, and
   // the mesh-side distance field is computed against those edges as real line
   // segments, so the pattern is not tied to the lattice resolution.
@@ -700,9 +700,16 @@ export function growBark(mesh, skel, opts = {}) {
     sel = selectTrunkFaces(out, skel, inPath, fr, O);
   }
   let faces = sel;
-  // the fissure spacing follows what the mesh can actually resolve
-  const achieved = regionMaxEdge(out, faces);
-  if (O.autoRidge) O.ridgeWidth = Math.max(O.ridgeWidth, achieved * 7);
+  // The fissure spacing must be something the mesh can actually resolve. A
+  // furrow half-width narrower than one quad simply aliases away - the carve
+  // happens but nothing is visible - so the ridges are widened to match the
+  // grid we could afford, rather than silently producing a smooth trunk.
+  // use the MEDIAN quad size: the max is skewed by the few big collar faces
+  // around the branch attachments and would trigger a pointless widening
+  const achieved = regionMedianEdge(out, faces);
+  const minRidge = (achieved * 1.4) / Math.max(O.furrowWidth, 0.05);
+  const underResolved = O.ridgeWidth < minRidge;
+  if (underResolved && O.autoRidge) O.ridgeWidth = minRidge;
   const ridgeUsed = O.ridgeWidth;
   // the cage cross-section is a square: round it off before carving bark into it
   smoothRegion(out, faces, O.smoothPasses ?? 6, 0.55);
@@ -831,7 +838,9 @@ export function growBark(mesh, skel, opts = {}) {
       regionFaces: faces.size,
       regionVerts: verts.size,
       ridgeWidth: ridgeUsed,
+      ridgeRequested: (opts.ridgeWidth ?? BARK_DEFAULTS.ridgeWidth),
       hoopResolution: achieved,
+      underResolved,
       carvedVerts: carved,
       maxCarve,
       meanCarve: dbgSum / Math.max(verts.size, 1),

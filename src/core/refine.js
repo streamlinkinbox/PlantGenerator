@@ -350,6 +350,22 @@ export function regionMaxEdge(mesh, faceSel) {
   return mx;
 }
 
+/** Median edge length in the region - the typical quad size, not the worst. */
+export function regionMedianEdge(mesh, faceSel) {
+  const lens = [];
+  for (const fi of faceSel) {
+    const f = mesh.faces[fi];
+    for (let i = 0; i < 4; i++) {
+      const a = mesh.positions[f[i]];
+      const b = mesh.positions[f[(i + 1) % 4]];
+      lens.push(Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]));
+    }
+  }
+  if (!lens.length) return 0;
+  lens.sort((x, y) => x - y);
+  return lens[lens.length >> 1];
+}
+
 /**
  * Laplacian smoothing restricted to the interior of a region. The cage's trunk
  * cross-section is a square; a few passes of this round it off before the bark

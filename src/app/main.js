@@ -360,12 +360,16 @@ function buildSkin() {
 function buildBark() {
   ensureSkin();
   const hud = document.getElementById('hud');
-  hud.textContent = 'growing bark — fracture simulation running…';
+  hud.textContent =
+    'growing bark — fracture simulation + local refinement, ~15s, the tab will freeze…';
   // let the HUD paint before the (synchronous) heavy work
   requestAnimationFrame(() => {
     const t0 = performance.now();
-    const src = Math.round(params.subdivisions) > 0 ? fine : cage;
-    const res = growBark(src, skel, { ...params, barkMaxLevels: Math.round(params.barkMaxLevels) });
+    // Feed the CAGE, not the subdivided skin: growBark refines the trunk
+    // locally, and starting from an already-subdivided mesh just spends the
+    // face budget on the rest of the tree - the trunk then ends up too coarse
+    // to resolve a furrow and the relief aliases away.
+    const res = growBark(cage, skel, { ...params, barkMaxLevels: Math.round(params.barkMaxLevels) });
     bark = res.mesh;
     barkStats = { ...res.stats, totalMs: performance.now() - t0 };
     if (objBark) { objBark.geometry.dispose(); skinGroup.remove(objBark); }
@@ -374,6 +378,10 @@ function buildBark() {
     barkStale = false;
     report();
     applyStage();
+    document.getElementById('hud').textContent =
+      `bark grown in ${(barkStats.totalMs / 1000).toFixed(1)}s — ${bark.faces.length.toLocaleString()} quads, ` +
+      `${barkStats.brokenHoop} fissures, ridge ${barkStats.ridgeWidth.toFixed(3)}` +
+      `\ndrag to orbit · scroll to zoom`;
   });
 }
 
@@ -459,6 +467,12 @@ build      ${lastTimes.skinMs.toFixed(0)}ms skin · ${lastTimes.subMs.toFixed(0)
 BARK (trunk only)
 mesh       <b>${bark.validate().faces}</b> quads · ${barkStats.refineLevels} refine levels
 fissures   <b>${barkStats.brokenHoop}</b> vertical · ${barkStats.brokenAxial} cross
+ridge      <b>${barkStats.ridgeWidth.toFixed(3)}</b>${
+          barkStats.underResolved
+            ? ` <span class="bad">(widened from ${barkStats.ridgeRequested.toFixed(3)} — mesh limit)</span>`
+            : ''
+        }
+quad size  ${barkStats.hoopResolution.toFixed(4)} · furrow half ${(barkStats.ridgeWidth * params.furrowWidth).toFixed(4)}
 lattice    ${barkStats.latticeNodes} nodes · growth ×${barkStats.growthUsed.toFixed(2)}
 carved     <b>${barkStats.carvedVerts}</b> verts · max ${(barkStats.maxCarve * 1000).toFixed(1)}mm
 watertight ${flag(bark.validate().watertight)} · shells ${bark.validate().shells}
