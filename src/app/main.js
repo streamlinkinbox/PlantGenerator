@@ -4,7 +4,7 @@ addEventListener('error', (e) => {
   if (hud) hud.textContent = `error: ${e.message}`;
 });
 
-const BUILD = '15:21:33';
+const BUILD = '15:33:11';
 console.log('%cPlantGenerator build ' + BUILD, 'color:#38e2a8;font-weight:bold');
 // the watchdog in index.html checks these two flags
 window.__PG_MODULE = BUILD;

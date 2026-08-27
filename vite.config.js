@@ -6,6 +6,16 @@ import { defineConfig } from 'vite';
 // requests the entry with a ?v=<build> query so a cached copy cannot be reused
 // by URL either.
 export default defineConfig({
+  // Do NOT pre-bundle three. Vite's optimizer serves deps from
+  // /node_modules/.vite/deps/three.js?v=<hash>, and that hash changes whenever
+  // the server re-optimizes. An open tab then imports a hash that no longer
+  // exists, Vite answers 504 "Outdated Optimize Dep", and a failed import
+  // inside a module graph fails SILENTLY - no error event, no console entry
+  // from our code, the module simply never executes. Excluding three keeps the
+  // import on a stable path that cannot go stale.
+  optimizeDeps: {
+    exclude: ['three', 'three/addons/controls/OrbitControls.js'],
+  },
   server: {
     host: '0.0.0.0',
     port: 5173,
