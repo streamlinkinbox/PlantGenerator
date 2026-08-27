@@ -110,65 +110,7 @@ Everything is emitted into a single `QuadMesh`, welded once, and that is the del
 These passes alternate (length fix → separate → length fix → separate + prune) because pushing
 one constraint can break the other.
 
-### 3. Bark — geometry, not a texture (trunk only, for now)
-
-Stage 6 grows bark as **real displaced quads**: no UVs, no tiling, nothing to bake against.
-
-**Why bark cracks.** The vascular cambium keeps adding wood, so the stem's girth grows, but the
-outer bark (periderm / rhytidome) is dead and rigid and cannot grow with it. The girth increase
-puts the outer layer in **tangential (circumferential) tension** until it ruptures, and because
-the tension is tangential the fractures open perpendicular to it — which is why bark fissures run
-**vertically**, with ridges between them (Braun 1955; [Cork-Containing Barks review, *Frontiers in
-Materials* 2016](https://www.frontiersin.org/journals/materials/articles/10.3389/fmats.2016.00063/full);
-[Meliaceae bark study, *Trees* 2025](https://link.springer.com/article/10.1007/s00468-025-02661-7)).
-When elastic parenchyma redistributes some of that stress lengthwise the ridges also crack
-transversally and the pattern becomes **reticulate** — that is the `reticulation` slider.
-
-**How it is simulated.** Federl & Prusinkiewicz model exactly this as a **bi-layered material**: a
-rigid outer layer bonded to a growing substrate, discretised as a mass-spring lattice (*A Texture
-Model for Cracked Surfaces, with an Application to Tree Bark*, WCGS 1996; *Modelling Fracture
-Formation in Bi-layered Materials*, WCGS 2002) or FEM (*Finite Element Model of Fracture Formation
-on Growing Surfaces*, ICCS 2004). Dale, Runions, Hobill & Prusinkiewicz use the same mass-spring
-formulation for [bark patterning in grasstrees](https://algorithmicbotany.org/papers/modelling-biomechanics-of-bark.pdf)
-(*Annals of Botany* 114:629, 2014). This implementation follows that model:
-
-1. the trunk surface is **unrolled** into a periodic (arc-length, height) strip and discretised as
-   a spring lattice — one cell per half ridge;
-2. the substrate is **inflated** step by step; each node is bonded to its substrate point;
-3. springs whose strain passes a randomised toughness threshold **rupture**. Toughness is
-   **anisotropic** — cork and phloem fibres run lengthwise, so tearing along the grain (what hoop
-   tension does) is far easier than across it, which is what orients the fissures;
-4. only a small budget of the worst-loaded springs fails per pass, and the continuation of an
-   existing fissure gets an explicit **crack-tip** advantage, so cracks *propagate* into long
-   lines instead of nucleating as scattered pits;
-5. the bond stiffness comes from **shear lag**: a fissure unloads the sheet either side of itself
-   over `L = cell·√(k_spring/k_bond)`, so the requested ridge width pins `k_bond = (cell/ridge)²`.
-   Growth stops the moment the pattern reaches the requested fissure density;
-6. the resulting fissure network is turned into **line segments** and carved into the mesh as
-   displacement along the vertex normals — V-shaped grooves with flat-topped ridges, per the
-   [macroscopic bark terminology](https://www.researchgate.net/publication/52001585_Survey_of_English_Macroscopic_Bark_Terminology)
-   ("grooves with width less than the flat-topped ridges separating them"), plus a crowned ridge
-   and a fine fibrous grain.
-
-The trunk is **locally refined** first (`src/core/refine.js`) with parity-correct all-quad
-transition templates, so only the trunk carries the ~1 cm grid the relief needs.
-
-**Honest limitation.** A quad mesh cannot have a lone hanging node (a pentagon has no
-quadrangulation), so an edge split necessarily propagates along its whole edge ring. The bark
-patch itself comes out clean — 58k faces, max aspect **13:1**, 2 slivers — but each refinement
-level also slices a band through the rest of the tree, leaving stretched (not degenerate) quads
-there: with the default 5 levels that band is large. The topology is unaffected (still all quads,
-watertight, one shell, χ = 2, zero pinched faces) and the *shape* is unchanged, since those are
-flat splits. Lowering `barkMaxLevels`, or subdividing the tree globally before growing bark,
-trades bark resolution for a tidier surrounding grid. A graded transition patch is the proper fix
-and is not implemented yet.
-
-```bash
-node scripts/validate.mjs --bark --seed 7 --out out/bark.obj
-node scripts/render.mjs --seed 7 --bark --trunk --zoom 2.6 --out bark.png
-```
-
-### 4. Subdivision
+### 3. Subdivision
 
 Catmull-Clark (`quad in → quad out`, boundary/crease-aware) on the control cage. Loop radii are
 pre-compensated (`radiusCompensation`) for subdivision shrinkage.
@@ -230,8 +172,6 @@ src/core/rng.js       seedable mulberry32
 src/core/skeleton.js  vertex/bone generation + junction conditioning
 src/core/skin.js      hub boxes, socket extrusion, limb sweeping, stitching
 src/core/quadmesh.js  quad container, welding, Catmull-Clark, topology audit, OBJ
-src/core/refine.js    local all-quad refinement (parity-correct transition templates)
-src/core/bark.js      trunk selection, bi-layer growth-fracture sim, bark displacement
 src/app/              Three.js viewer (stages, params, live audit, OBJ export)
 scripts/              headless validate / sweep / stress / render
 ```

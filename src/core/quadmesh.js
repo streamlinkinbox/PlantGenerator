@@ -232,9 +232,8 @@ export class QuadMesh {
       const hi = Math.max(...e);
       minEdge = Math.min(minEdge, lo);
       const aspect = hi / Math.max(lo, 1e-9);
-      // judge each face against its OWN size: a mesh with bark on the trunk is
-      // deliberately multi-resolution, so a global scale would flag every fine
-      // quad as degenerate
+      // judge each face against its OWN size, so a mesh with mixed resolution
+      // does not have every fine quad flagged as degenerate
       if (lo < ((e[0] + e[1] + e[2] + e[3]) / 4) * 0.02) pinched++;
       if (aspect > aspectLimit) slivers++;
       if (aspect > worst.aspect) worst = { face: fi, aspect };

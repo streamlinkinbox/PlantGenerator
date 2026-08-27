@@ -13,7 +13,7 @@
       <header>
         <h1>Plant<span>Generator</span></h1>
         <p class="sub">skeleton vertices → box hubs → single all-quad skin</p>
-        <p class="sub build">build <b id="build">16:03:26</b> — if this is not the newest build, hard-reload (Ctrl+Shift+R)</p>
+        <p class="sub build">build <b id="build">16:32:18</b> — if this is not the newest build, hard-reload (Ctrl+Shift+R)</p>
       </header>
 
       <section>
@@ -24,7 +24,6 @@
           <button data-stage="2">3 · Hub boxes</button>
           <button data-stage="3">4 · Quad cage</button>
           <button data-stage="4">5 · Skin</button>
-          <button data-stage="5">6 · Bark</button>
         </div>
         <div class="row">
           <button id="grow" class="wide">▶ Replay growth</button>
@@ -47,12 +46,6 @@
       <section>
         <h2>Skin</h2>
         <div id="skinControls"></div>
-      </section>
-
-      <section>
-        <h2>Bark <span class="tag">trunk only · growth fracture</span></h2>
-        <div id="barkControls"></div>
-        <div class="row"><button id="growBark" class="wide">🌲 Grow bark on trunk</button></div>
       </section>
 
       <section>
@@ -86,7 +79,7 @@
         var stage = window.__PG_MODULE ? 'the module loaded but init failed' : 'the module never executed';
         var box = document.getElementById('stats');
         var msg = '<span class="bad">APP DID NOT START</span>\n' + stage +
-          '\nexpected build 16:03:26\n' +
+          '\nexpected build 16:32:18\n' +
           (window.__PG_ERRORS.length ? '\n' + window.__PG_ERRORS.slice(0, 6).join('\n') : '\nno resource errors captured (if the tab was open while the server restarted, reload it)');
         if (box) box.innerHTML = msg;
         var hud = document.getElementById('hud');

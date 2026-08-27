@@ -7,7 +7,6 @@ import { dirname } from 'node:path';
 import zlib from 'node:zlib';
 import { generateSkeleton } from '../src/core/skeleton.js';
 import { skinSkeleton } from '../src/core/skin.js';
-import { growBark } from '../src/core/bark.js';
 import * as V from '../src/core/vec3.js';
 
 const args = process.argv.slice(2);
@@ -24,13 +23,7 @@ const pitch = (Number(arg('--pitch', 8)) * Math.PI) / 180;
 const extra = JSON.parse(arg('--json', '{}'));
 const skel = generateSkeleton({ seed, ...extra });
 const { mesh } = skinSkeleton(skel);
-let out = subdiv > 0 ? mesh.subdivide(subdiv) : mesh;
-if (has('--bark')) {
-  const t = Date.now();
-  const r = growBark(out, skel, JSON.parse(arg('--barkopts', '{}')));
-  out = r.mesh;
-  console.log('bark', JSON.stringify(r.stats), 'in', Date.now() - t, 'ms');
-}
+const out = subdiv > 0 ? mesh.subdivide(subdiv) : mesh;
 
 // camera
 let lo = [1e9, 1e9, 1e9], hi = [-1e9, -1e9, -1e9];
