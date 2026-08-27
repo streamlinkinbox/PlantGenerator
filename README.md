@@ -25,8 +25,37 @@ node scripts/validate.mjs --stress   # 30 randomized parameter sets
 ### 1. Skeleton (vertices only)
 
 Breadth-first recursive branching with phyllotaxis roll, gravitropism, per-segment curl,
-length/radius falloff and a hard vertex budget. Three clean-up passes run before anything is
-skinned, and they are what make the skinning safe:
+length falloff and a hard vertex budget. **Stages 1–2 are live**: dragging a shape slider
+rebuilds only the point cloud (~80 ms on the default tree, overlap solver skipped) and the box /
+quad / subdivision chain below it is not run at all. It is upgraded to a full solve when you stop
+dragging, and the skin is built lazily the first time you look at stage 3/4/5 (or export).
+
+#### Thickness: da Vinci's rule, not an arbitrary falloff
+
+Branch radii come from the **pipe model / Leonardo da Vinci's rule** rather than a per-level
+multiplier — that constant multiplier is exactly why every twig used to look the same size:
+
+```
+r_parent^α = Σ r_child^α          α = "Leonardo exponent", 1.8–2.3 measured in real species
+```
+
+α = 2 is exact cross-section (area) preservation, which is what da Vinci observed; measurements
+across species put it between 1.8 and 2.3 and it is species-dependent, so it is a slider
+(`pipeExponent`). Real stems also taper *between* forks (WBE / Mäkelä pipe-theory taper), so each
+bone adds a length-proportional term (`taperRate`). Radii are solved in units of "one twig tip"
+from the leaves down, then scaled so the base matches the requested `trunkRadius` — so a twig is
+thin because of how little tree hangs off it, and a bough is fat because of how much does.
+
+On top of that, three morphological features from the arboriculture literature:
+
+* **branch collar** — the swelling where branch and trunk growth rings overlap. Applied with an
+  exponential falloff over a couple of radii and weighted by how *lateral* the branch is, so a
+  thin side branch gets a pronounced collar and a dominant leader almost none;
+* **root flare** — the trunk thickening toward the ground;
+* **correlated thickness noise** — so no two twigs are identical cylinders.
+
+The result: a 1 : 30-ish trunk-to-twig radius ratio that follows the branching structure, with a
+visible U-shaped attachment and collar at every fork. Several clean-up passes run before anything is skinned, and they are what make the skinning safe:
 
 * `limitJunctionDegree` — a hub box only has 6 faces (and needs good ones), so no vertex carries
   more than 4 bones. Overcrowded junctions are split into two junctions joined by a short bone.

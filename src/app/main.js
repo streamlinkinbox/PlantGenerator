@@ -1,14 +1,19 @@
+// surface any runtime error in the HUD instead of failing to a black screen
+addEventListener('error', (e) => {
+  const hud = document.getElementById('hud');
+  if (hud) hud.textContent = `error: ${e.message}`;
+});
+
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { generateSkeleton, DEFAULTS, orderByGrowth, skeletonStats } from '../core/skeleton.js';
 import { skinSkeleton, SKIN_DEFAULTS } from '../core/skin.js';
 
 // ---------------------------------------------------------------- parameters
-const treeSpec = [
+const shapeSpec = [
   ['seed', 1, 9999, 1],
   ['levels', 0, 6, 1],
   ['trunkHeight', 1, 12, 0.1],
-  ['trunkRadius', 0.05, 1.2, 0.01],
   ['segmentsPerBranch', 2, 12, 1],
   ['childrenPerBranch', 0, 6, 1],
   ['splitCount', 0, 4, 1],
@@ -16,12 +21,22 @@ const treeSpec = [
   ['angleVariance', 0, 40, 1],
   ['branchStart', 0, 0.9, 0.01],
   ['lengthFalloff', 0.3, 1.0, 0.01],
-  ['radiusFalloff', 0.3, 0.95, 0.01],
-  ['taper', 0.2, 1.0, 0.01],
   ['curl', 0, 0.8, 0.01],
   ['gravitropism', -0.4, 0.6, 0.01],
-  ['minRadius', 0.005, 0.15, 0.005],
+  ['phyllotaxis', 60, 180, 0.5],
   ['collisionClearance', 1.0, 2.0, 0.02],
+];
+// da Vinci / pipe-model thickness controls
+const woodSpec = [
+  ['trunkRadius', 0.05, 1.2, 0.01],
+  ['pipeExponent', 1.4, 3.0, 0.05],
+  ['taperRate', 0, 0.6, 0.01],
+  ['collarFlare', 0, 1.0, 0.02],
+  ['collarLength', 0.5, 6, 0.1],
+  ['rootFlare', 0, 1.2, 0.02],
+  ['rootFlareLength', 1, 12, 0.5],
+  ['radiusJitter', 0, 0.3, 0.01],
+  ['radiusFalloff', 0.3, 0.95, 0.01],
 ];
 const skinSpec = [
   ['subdivisions', 0, 3, 1],
@@ -32,11 +47,10 @@ const skinSpec = [
   ['maxTurn', 3, 45, 1],
   ['tipTaper', 0.05, 1.0, 0.01],
   ['hubFit', 0, 1, 0.05],
-  ['collarRows', 1, 3, 1],
-  ['minLoops', 1, 6, 1],
 ];
 
 const params = { ...DEFAULTS, ...SKIN_DEFAULTS, subdivisions: 1 };
+const sliders = {};
 
 function buildControls(host, spec) {
   for (const [key, min, max, step] of spec) {
@@ -47,17 +61,20 @@ function buildControls(host, spec) {
     input.type = 'range';
     input.min = min; input.max = max; input.step = step; input.value = params[key];
     const out = wrap.querySelector('b');
+    const isSkinOnly = spec === skinSpec;
     input.addEventListener('input', () => {
       params[key] = parseFloat(input.value);
       out.textContent = params[key];
-      schedule();
+      onParamChanged(isSkinOnly);
     });
+    input.addEventListener('change', () => onParamSettled());
     wrap.appendChild(input);
     host.appendChild(wrap);
-    spec.el = input;
+    sliders[key] = { input, out };
   }
 }
-buildControls(document.getElementById('treeControls'), treeSpec);
+buildControls(document.getElementById('treeControls'), shapeSpec);
+buildControls(document.getElementById('woodControls'), woodSpec);
 buildControls(document.getElementById('skinControls'), skinSpec);
 
 // ---------------------------------------------------------------- three setup
@@ -69,7 +86,7 @@ view.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0d1015);
-scene.fog = new THREE.Fog(0x0d1015, 30, 90);
+scene.fog = new THREE.Fog(0x0d1015, 34, 95);
 
 const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.05, 500);
 camera.position.set(7, 5, 9);
@@ -91,32 +108,45 @@ grid.material.transparent = true;
 grid.material.opacity = 0.6;
 scene.add(grid);
 
-const root = new THREE.Group();
-scene.add(root);
+const skelGroup = new THREE.Group();
+const skinGroup = new THREE.Group();
+scene.add(skelGroup, skinGroup);
 
 // ---------------------------------------------------------------- materials
 const matPoints = new THREE.PointsMaterial({ size: 5, sizeAttenuation: false, vertexColors: true });
 const matBones = new THREE.LineBasicMaterial({ color: 0x3ad6a0, transparent: true, opacity: 0.85 });
 const matHub = new THREE.LineBasicMaterial({ color: 0xffb454, transparent: true, opacity: 0.9 });
 const matWire = new THREE.LineBasicMaterial({ color: 0x35ffc0, transparent: true, opacity: 0.55 });
-const matSurf = new THREE.MeshStandardMaterial({ color: 0xb08a5e, roughness: 0.78, metalness: 0.02, flatShading: false });
-const matCage = new THREE.MeshStandardMaterial({ color: 0x6f7f96, roughness: 0.9, metalness: 0.0, flatShading: true });
+const matSurf = new THREE.MeshStandardMaterial({ color: 0xb08a5e, roughness: 0.78, metalness: 0.02 });
+const matCage = new THREE.MeshStandardMaterial({ color: 0x6f7f96, roughness: 0.9, flatShading: true });
 
 // ---------------------------------------------------------------- state
 let skel = null;
 let cage = null;
 let fine = null;
+let skinned = null;
 let objPoints, objBones, objHubs, objCage, objCageWire, objSkin, objSkinWire;
 let growth = null;
 let growT = 1;
 let stage = 0;
+let skinStale = true;
+let lastTimes = { skelMs: 0, skinMs: 0, subMs: 0 };
+let previewOnly = false;
+
+const skeletonOnly = () => stage < 2;
 
 const stageButtons = [...document.querySelectorAll('#stages button')];
 stageButtons.forEach((b) =>
   b.addEventListener('click', () => {
-    stage = +b.dataset.stage;
+    const next = +b.dataset.stage;
+    const wasSkeleton = skeletonOnly();
+    stage = next;
     stageButtons.forEach((x) => x.classList.toggle('on', x === b));
-    if (stage <= 1) growT = 0;
+    if (wasSkeleton && !skeletonOnly()) {
+      if (previewOnly) buildSkeleton(false); // upgrade the quick preview first
+      buildSkin();
+    }
+    if (stage <= 1) growT = Math.min(growT, 1);
     applyStage();
   })
 );
@@ -129,14 +159,19 @@ document.getElementById('flat').addEventListener('change', (e) => {
 document.getElementById('grow').addEventListener('click', () => { growT = 0; });
 document.getElementById('reseed').addEventListener('click', () => {
   params.seed = 1 + Math.floor(Math.random() * 9999);
-  const el = document.querySelector('#treeControls input');
-  el.value = params.seed;
-  el.previousElementSibling.querySelector('b').textContent = params.seed;
+  sliders.seed.input.value = params.seed;
+  sliders.seed.out.textContent = params.seed;
   growT = 0;
-  rebuild();
+  rebuild(false);
 });
-document.getElementById('exportCage').addEventListener('click', () => download('cage.obj', cage.toOBJ('tree_cage')));
-document.getElementById('exportSub').addEventListener('click', () => download('skin.obj', fine.toOBJ('tree_skin')));
+document.getElementById('exportCage').addEventListener('click', () => {
+  ensureSkin();
+  download('cage.obj', cage.toOBJ('tree_cage'));
+});
+document.getElementById('exportSub').addEventListener('click', () => {
+  ensureSkin();
+  download('skin.obj', fine.toOBJ('tree_skin'));
+});
 
 function download(name, text) {
   const url = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
@@ -147,9 +182,7 @@ function download(name, text) {
 
 // ---------------------------------------------------------------- geometry
 function disposeGroup(g) {
-  g.traverse((o) => {
-    if (o.geometry) o.geometry.dispose();
-  });
+  g.traverse((o) => { if (o.geometry) o.geometry.dispose(); });
   g.clear();
 }
 
@@ -197,6 +230,7 @@ function hubGeometry(hubs) {
   return g;
 }
 
+/** Point cloud + bones, coloured and ordered for the growth animation. */
 function skeletonObjects(sk) {
   const { order, dist, maxDist } = orderByGrowth(sk);
   const rank = new Int32Array(sk.nodes.length);
@@ -204,11 +238,12 @@ function skeletonObjects(sk) {
 
   const pos = new Float32Array(order.length * 3);
   const col = new Float32Array(order.length * 3);
+  const c = new THREE.Color();
   order.forEach((n, i) => {
     const p = sk.nodes[n].p;
     pos.set(p, i * 3);
     const t = dist[n] / maxDist;
-    const c = new THREE.Color().setHSL(0.42 - 0.36 * t, 0.85, 0.45 + 0.2 * t);
+    c.setHSL(0.42 - 0.36 * t, 0.85, 0.45 + 0.2 * t);
     col.set([c.r, c.g, c.b], i * 3);
   });
   const gp = new THREE.BufferGeometry();
@@ -217,7 +252,9 @@ function skeletonObjects(sk) {
   const points = new THREE.Points(gp, matPoints);
   points.frustumCulled = false;
 
-  const bones = sk.bones.slice().sort((a, b) => Math.max(rank[a[0]], rank[a[1]]) - Math.max(rank[b[0]], rank[b[1]]));
+  const bones = sk.bones.slice().sort(
+    (a, b) => Math.max(rank[a[0]], rank[a[1]]) - Math.max(rank[b[0]], rank[b[1]])
+  );
   const bp = new Float32Array(bones.length * 6);
   bones.forEach(([a, b], i) => {
     bp.set(sk.nodes[a].p, i * 6);
@@ -232,59 +269,121 @@ function skeletonObjects(sk) {
 }
 
 // ---------------------------------------------------------------- pipeline
-let timer = null;
-function schedule() {
-  clearTimeout(timer);
-  timer = setTimeout(rebuild, 90);
-}
+const intParams = () => ({
+  ...params,
+  levels: Math.round(params.levels),
+  segmentsPerBranch: Math.round(params.segmentsPerBranch),
+  childrenPerBranch: Math.round(params.childrenPerBranch),
+  splitCount: Math.round(params.splitCount),
+  seed: Math.round(params.seed),
+});
 
-function rebuild() {
+/** Stage 1-2: vertices + bones only. `quick` skips the overlap solver. */
+function buildSkeleton(quick) {
   const t0 = performance.now();
-  disposeGroup(root);
+  skel = generateSkeleton({ ...intParams(), skipCollisions: quick ? 1 : 0 });
+  previewOnly = !!quick;
+  lastTimes.skelMs = performance.now() - t0;
 
-  skel = generateSkeleton({
-    ...params,
-    levels: Math.round(params.levels),
-    segmentsPerBranch: Math.round(params.segmentsPerBranch),
-    childrenPerBranch: Math.round(params.childrenPerBranch),
-    splitCount: Math.round(params.splitCount),
-    seed: Math.round(params.seed),
-  });
-  const t1 = performance.now();
-
-  const skinned = skinSkeleton(skel, params);
-  cage = skinned.mesh;
-  const t2 = performance.now();
-
-  const levels = Math.round(params.subdivisions);
-  fine = levels > 0 ? cage.subdivide(levels) : cage;
-  const t3 = performance.now();
-
+  disposeGroup(skelGroup);
   growth = skeletonObjects(skel);
   objPoints = growth.points;
   objBones = growth.lines;
+  skelGroup.add(objPoints, objBones);
+  skinStale = true;
+  report();
+  applyStage();
+}
+
+/** Stage 3-5: hubs, quad cage and subdivided skin. */
+function buildSkin() {
+  const t0 = performance.now();
+  skinned = skinSkeleton(skel, params);
+  cage = skinned.mesh;
+  const t1 = performance.now();
+  const levels = Math.round(params.subdivisions);
+  fine = levels > 0 ? cage.subdivide(levels) : cage;
+  const t2 = performance.now();
+  lastTimes.skinMs = t1 - t0;
+  lastTimes.subMs = t2 - t1;
+
+  disposeGroup(skinGroup);
   objHubs = new THREE.LineSegments(hubGeometry(skinned.hubs), matHub);
   objCage = new THREE.Mesh(meshGeometry(cage), matCage);
   objCageWire = new THREE.LineSegments(wireGeometry(cage), matWire);
   objSkin = new THREE.Mesh(meshGeometry(fine), matSurf);
   objSkinWire = new THREE.LineSegments(wireGeometry(fine), matWire);
-  root.add(objPoints, objBones, objHubs, objCage, objCageWire, objSkin, objSkinWire);
-
-  report(skinned, fine, { skelMs: t1 - t0, skinMs: t2 - t1, subMs: t3 - t2 });
+  skinGroup.add(objHubs, objCage, objCageWire, objSkin, objSkinWire);
+  skinStale = false;
+  report();
   applyStage();
 }
 
-function report(skinned, out, times) {
-  const v = cage.validate();
-  const vf = out.validate();
-  const q = cage.geometryQuality();
+function ensureSkin() {
+  if (previewOnly) buildSkeleton(false);
+  if (skinStale) buildSkin();
+}
+
+function rebuild(quick) {
+  buildSkeleton(quick);
+  if (!skeletonOnly()) buildSkin();
+}
+
+// While a slider is being dragged we only refresh what the current stage
+// actually shows - in vertex/bone mode that is a ~80ms skeleton rebuild, and
+// the box/skin chain below it is not run at all.
+let rafPending = false;
+let idleTimer = null;
+function onParamChanged(skinOnlyParam) {
+  clearTimeout(idleTimer);
+  if (skinOnlyParam) {
+    idleTimer = setTimeout(() => { if (!skeletonOnly()) buildSkin(); }, 60);
+    return;
+  }
+  if (skeletonOnly()) {
+    if (!rafPending) {
+      rafPending = true;
+      requestAnimationFrame(() => { rafPending = false; buildSkeleton(true); });
+    }
+    idleTimer = setTimeout(() => buildSkeleton(false), 260);
+  } else {
+    idleTimer = setTimeout(() => rebuild(false), 110);
+  }
+}
+function onParamSettled() {
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => rebuild(false), 40);
+}
+
+function report() {
   const s = skeletonStats(skel);
+  const el = document.getElementById('stats');
+  const flag = (b) => `<span class="${b ? 'ok' : 'bad'}">${b ? 'PASS' : 'FAIL'}</span>`;
+  const col = skel.collisions || {};
+  const rr = skel.nodes.map((n) => n.r);
+  const rMin = Math.min(...rr);
+  const rMax = Math.max(...rr);
+
+  let head = `
+skeleton   <b>${s.vertices}</b> verts · <b>${s.junctions}</b> forks · <b>${s.tips}</b> tips
+radius     <b>${rMax.toFixed(3)}</b> trunk → <b>${rMin.toFixed(4)}</b> twig (1:${(rMax / rMin).toFixed(0)})
+overlaps   ${col.skipped ? '<span class="dim">preview — solver skipped</span>' : `${flag(skel.overlap.pairs === 0)} (${col.initial || 0} fixed, ${col.pruned || 0} pruned)`}
+skel build <b>${lastTimes.skelMs.toFixed(0)}</b> ms`;
+
+  if (skeletonOnly() || skinStale || !cage) {
+    el.innerHTML = `${head}
+<span class="dim">${skeletonOnly()
+      ? 'skin chain not running in this stage — switch to 3/4/5 to build boxes + quads'
+      : 'building skin…'}</span>`;
+    return;
+  }
+
+  const v = cage.validate();
+  const q = cage.geometryQuality();
+  const vf = fine.validate();
   const hist = cage.valenceHistogram();
   const poles = Object.entries(hist).filter(([k]) => +k !== 4).reduce((a, [, n]) => a + n, 0);
-  const flag = (b) => `<span class="${b ? 'ok' : 'bad'}">${b ? 'PASS' : 'FAIL'}</span>`;
-  const col = skel.collisions || { initial: 0, pruned: 0 };
-  document.getElementById('stats').innerHTML = `
-skeleton   <b>${s.vertices}</b> verts · <b>${s.junctions}</b> junctions · <b>${s.tips}</b> tips
+  el.innerHTML = `${head}
 cage       <b>${v.vertices}</b> v / <b>${v.faces}</b> quads
 skin       <b>${vf.vertices}</b> v / <b>${vf.faces}</b> quads
 quads only ${flag(v.quadsOnly)}
@@ -292,14 +391,10 @@ watertight ${flag(v.boundaryEdges === 0)} (${v.boundaryEdges} open edges)
 manifold   ${flag(v.nonManifoldEdges === 0 && v.flippedEdges === 0)}
 single obj ${flag(v.shells === 1)} (${v.shells} shell)
 euler χ    <b>${v.euler}</b> · genus <b>${v.genus}</b>
-no overlap ${flag(skel.overlap.pairs === 0)} (${skel.overlap.pairs} pairs, ${col.initial} fixed, ${col.pruned} pruned)
-no twist   ${flag(skinned.backwardSockets === 0)} (${skinned.backwardSockets} mirrored sockets)
-no pinch   ${flag(q.pinched === 0)} · slivers <b>${q.slivers}</b>
-max aspect <b>${q.maxAspect.toFixed(1)}</b> : 1
-poles      <b>${poles}</b> / ${v.vertices} verts non-4-valence
-build      ${times.skelMs.toFixed(0)}ms skel · ${times.skinMs.toFixed(0)}ms skin · ${times.subMs.toFixed(0)}ms subdiv`;
-  document.getElementById('hud').textContent =
-    `stage ${stage + 1}/5 · drag to orbit · scroll to zoom`;
+no twist   ${flag(skinned.backwardSockets === 0)}
+no pinch   ${flag(q.pinched === 0)} · max aspect <b>${q.maxAspect.toFixed(1)}</b>:1
+poles      <b>${poles}</b> / ${v.vertices} non-4-valence
+build      ${lastTimes.skinMs.toFixed(0)}ms skin · ${lastTimes.subMs.toFixed(0)}ms subdiv`;
 }
 
 function applyStage() {
@@ -307,23 +402,24 @@ function applyStage() {
   const keepSkel = document.getElementById('showSkel').checked;
   if (!objPoints) return;
 
-  objPoints.visible = stage === 0 || keepSkel;
-  objBones.visible = stage >= 1 || keepSkel;
-  objHubs.visible = stage === 2;
-  objCage.visible = stage === 2 || stage === 3;
-  objCageWire.visible = (stage === 2 || stage === 3) && wire;
-  objSkin.visible = stage === 4;
-  objSkinWire.visible = stage === 4 && wire;
-  if (stage === 2) matCage.opacity = 1;
+  const skinReady = !skinStale && objCage;
+  objPoints.visible = stage <= 1 || keepSkel;
+  if (skinReady) {
+    objHubs.visible = stage === 2;
+    objCage.visible = stage === 2 || stage === 3;
+    objCageWire.visible = (stage === 2 || stage === 3) && wire;
+    objSkin.visible = stage === 4;
+    objSkinWire.visible = stage === 4 && wire;
+  }
+  objBones.visible = stage <= 1 || keepSkel;
+  matBones.opacity = stage === 0 ? 0.35 : 0.9;
 
-  matBones.opacity = stage >= 2 ? 0.35 : 0.9;
-  if (stage <= 1) growT = Math.min(growT, 1);
   document.getElementById('hud').textContent =
-    ['vertices only — the skeleton point cloud',
-     'bones — vertices linked into limbs',
-     'hub boxes — a box is fitted at every junction',
+    ['vertices — live: sliders rebuild only the point cloud',
+     'bones — the vertices connected into limbs',
+     'hub boxes — a box fitted at every fork',
      'quad cage — boxes extruded + tubes stitched (1 shell)',
-     'skin — Catmull-Clark of the same all-quad cage'][stage] +
+     'skin — Catmull-Clark of that same all-quad cage'][stage] +
     '\ndrag to orbit · scroll to zoom';
 }
 
@@ -352,5 +448,7 @@ addEventListener('resize', () => {
 });
 
 growT = 0;
-rebuild();
+// only the skeleton is built up front: the box/skin chain is lazy, it runs the
+// first time you actually look at stage 3/4/5 (or export)
+buildSkeleton(false);
 tick();

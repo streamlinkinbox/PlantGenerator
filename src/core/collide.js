@@ -38,115 +38,158 @@ export function segSegDistance(p1, q1, p2, q2) {
   return { dist: V.dist(c1, c2), c1, c2 };
 }
 
-function buildBoneList(skel, clearance) {
-  const { nodes, bones } = skel;
-  return bones.map(([a, b], i) => ({
-    i,
-    a,
-    b,
-    r: Math.max(nodes[a].r, nodes[b].r) * clearance,
-    r0: Math.max(nodes[a].r, nodes[b].r),
-  }));
-}
-
-/** All pairs of non-neighbouring bones whose capsules overlap. */
+/**
+ * All pairs of non-neighbouring bones whose capsules overlap.
+ * Written allocation-free (flat typed arrays, numeric hashes) because the
+ * resolver calls it dozens of times per generated tree.
+ */
 export function findCollisions(skel, clearance = 1.35) {
-  const { nodes } = skel;
-  const list = buildBoneList(skel, clearance);
-  if (!list.length) return [];
+  const { nodes, bones } = skel;
+  const n = bones.length;
+  if (!n) return [];
 
-  // uniform grid over bone AABBs
+  const ax = new Float64Array(n); const ay = new Float64Array(n); const az = new Float64Array(n);
+  const bx = new Float64Array(n); const by = new Float64Array(n); const bz = new Float64Array(n);
+  const rad = new Float64Array(n); const raw = new Float64Array(n);
+  const ia = new Int32Array(n); const ib = new Int32Array(n);
   let cell = 0;
-  for (const bn of list) cell += V.dist(nodes[bn.a].p, nodes[bn.b].p) + bn.r * 2;
-  cell = Math.max(cell / list.length, 1e-4);
+  for (let i = 0; i < n; i++) {
+    const [a, b] = bones[i];
+    const A = nodes[a].p; const B = nodes[b].p;
+    ax[i] = A[0]; ay[i] = A[1]; az[i] = A[2];
+    bx[i] = B[0]; by[i] = B[1]; bz[i] = B[2];
+    const r0 = Math.max(nodes[a].r, nodes[b].r);
+    raw[i] = r0;
+    rad[i] = r0 * clearance;
+    ia[i] = a; ib[i] = b;
+    cell += Math.hypot(B[0] - A[0], B[1] - A[1], B[2] - A[2]) + r0 * 2 * clearance;
+  }
+  cell = Math.max(cell / n, 1e-4);
+  const inv = 1 / cell;
+
   const grid = new Map();
-  const key = (x, y, z) => `${x},${y},${z}`;
-  const cellsOf = (bn) => {
-    const A = nodes[bn.a].p;
-    const B = nodes[bn.b].p;
-    const out = [];
-    const lo = [0, 1, 2].map((k) => Math.floor((Math.min(A[k], B[k]) - bn.r) / cell));
-    const hi = [0, 1, 2].map((k) => Math.floor((Math.max(A[k], B[k]) + bn.r) / cell));
-    for (let x = lo[0]; x <= hi[0]; x++)
-      for (let y = lo[1]; y <= hi[1]; y++)
-        for (let z = lo[2]; z <= hi[2]; z++) out.push(key(x, y, z));
-    return out;
-  };
-  for (const bn of list) {
-    for (const k of cellsOf(bn)) {
-      if (!grid.has(k)) grid.set(k, []);
-      grid.get(k).push(bn.i);
-    }
+  const hash = (x, y, z) => ((x * 73856093) ^ (y * 19349663) ^ (z * 83492791)) | 0;
+  for (let i = 0; i < n; i++) {
+    const lox = Math.floor((Math.min(ax[i], bx[i]) - rad[i]) * inv);
+    const hix = Math.floor((Math.max(ax[i], bx[i]) + rad[i]) * inv);
+    const loy = Math.floor((Math.min(ay[i], by[i]) - rad[i]) * inv);
+    const hiy = Math.floor((Math.max(ay[i], by[i]) + rad[i]) * inv);
+    const loz = Math.floor((Math.min(az[i], bz[i]) - rad[i]) * inv);
+    const hiz = Math.floor((Math.max(az[i], bz[i]) + rad[i]) * inv);
+    for (let x = lox; x <= hix; x++)
+      for (let y = loy; y <= hiy; y++)
+        for (let z = loz; z <= hiz; z++) {
+          const k = hash(x, y, z);
+          let bucket = grid.get(k);
+          if (!bucket) { bucket = []; grid.set(k, bucket); }
+          bucket.push(i);
+        }
   }
 
-  // Tree metric: two bones that are close ALONG the skeleton are supposed to
-  // touch (consecutive segments of one fat limb, or two branches sharing a
-  // junction). Only bones that are far apart along the tree but close in space
-  // are real intersections.
-  const par = new Array(nodes.length).fill(-1);
+  // tree metric: bones close ALONG the skeleton are allowed to touch
+  const par = new Int32Array(nodes.length).fill(-1);
   const depth = new Int32Array(nodes.length);
   const arc = new Float64Array(nodes.length);
   {
     const seen = new Uint8Array(nodes.length);
-    const q = [0];
+    const q = new Int32Array(nodes.length);
+    let tail = 0;
+    q[tail++] = 0;
     seen[0] = 1;
-    while (q.length) {
-      const i = q.shift();
+    for (let head = 0; head < tail; head++) {
+      const i = q[head];
       for (const j of nodes[i].neighbors) {
         if (seen[j]) continue;
         seen[j] = 1;
         par[j] = i;
         depth[j] = depth[i] + 1;
         arc[j] = arc[i] + V.dist(nodes[i].p, nodes[j].p);
-        q.push(j);
+        q[tail++] = j;
       }
     }
   }
-  const lca = (u, v) => {
-    let a = u;
-    let b = v;
-    let guard = 0;
+  const treeDist = (u, v) => {
+    let a = u; let b = v; let guard = 0;
     while (depth[a] > depth[b] && guard++ < 1e6) a = par[a];
     while (depth[b] > depth[a] && guard++ < 1e6) b = par[b];
     while (a !== b && guard++ < 1e6) {
-      if (par[a] < 0 || par[b] < 0) return 0;
-      a = par[a];
-      b = par[b];
+      if (par[a] < 0 || par[b] < 0) { a = 0; b = 0; break; }
+      a = par[a]; b = par[b];
     }
-    return a;
-  };
-  const treeDist = (u, v) => {
-    const l = lca(u, v);
-    return arc[u] + arc[v] - 2 * arc[l];
-  };
-  const related = (x, y) => {
-    if (x.a === y.a || x.a === y.b || x.b === y.a || x.b === y.b) return true;
-    const along = Math.min(
-      treeDist(x.a, y.a), treeDist(x.a, y.b), treeDist(x.b, y.a), treeDist(x.b, y.b)
-    );
-    // use the raw radii so the "what counts as neighbouring" rule does not
-    // change when the test clearance changes
-    return along < 3.0 * (x.r0 + y.r0);
+    return arc[u] + arc[v] - 2 * arc[a];
   };
 
-  const seen = new Set();
+  const seenPair = new Set();
   const hits = [];
+  const cp = [0, 0, 0];
+  const cq = [0, 0, 0];
   for (const bucket of grid.values()) {
-    for (let i = 0; i < bucket.length; i++)
-      for (let j = i + 1; j < bucket.length; j++) {
-        const x = list[bucket[i]];
-        const y = list[bucket[j]];
-        const pk = x.i < y.i ? `${x.i}_${y.i}` : `${y.i}_${x.i}`;
-        if (seen.has(pk)) continue;
-        seen.add(pk);
-        if (related(x, y)) continue;
-        const need = x.r + y.r;
-        const res = segSegDistance(nodes[x.a].p, nodes[x.b].p, nodes[y.a].p, nodes[y.b].p);
-        if (res.dist >= need) continue;
-        hits.push({ x, y, ...res, need });
+    const m = bucket.length;
+    for (let p = 0; p < m; p++) {
+      const i = bucket[p];
+      for (let q2 = p + 1; q2 < m; q2++) {
+        const j = bucket[q2];
+        const need = rad[i] + rad[j];
+        // cheap reject before anything expensive
+        if (Math.min(ax[i], bx[i]) - need > Math.max(ax[j], bx[j])) continue;
+        if (Math.min(ax[j], bx[j]) - need > Math.max(ax[i], bx[i])) continue;
+        if (Math.min(ay[i], by[i]) - need > Math.max(ay[j], by[j])) continue;
+        if (Math.min(ay[j], by[j]) - need > Math.max(ay[i], by[i])) continue;
+        const pk = i < j ? i * n + j : j * n + i;
+        if (seenPair.has(pk)) continue;
+        seenPair.add(pk);
+        if (ia[i] === ia[j] || ia[i] === ib[j] || ib[i] === ia[j] || ib[i] === ib[j]) continue;
+        const along = Math.min(
+          treeDist(ia[i], ia[j]), treeDist(ia[i], ib[j]),
+          treeDist(ib[i], ia[j]), treeDist(ib[i], ib[j])
+        );
+        if (along < 3.0 * (raw[i] + raw[j])) continue;
+        const d = segSeg(
+          ax[i], ay[i], az[i], bx[i], by[i], bz[i],
+          ax[j], ay[j], az[j], bx[j], by[j], bz[j], cp, cq
+        );
+        if (d >= need) continue;
+        hits.push({
+          x: { i, a: ia[i], b: ib[i], r: rad[i], r0: raw[i] },
+          y: { i: j, a: ia[j], b: ib[j], r: rad[j], r0: raw[j] },
+          dist: d,
+          need,
+          c1: [cp[0], cp[1], cp[2]],
+          c2: [cq[0], cq[1], cq[2]],
+        });
       }
+    }
   }
   return hits;
+}
+
+/** Scalar segment-segment distance; writes the closest points into c1/c2. */
+function segSeg(p1x, p1y, p1z, q1x, q1y, q1z, p2x, p2y, p2z, q2x, q2y, q2z, c1, c2) {
+  const d1x = q1x - p1x, d1y = q1y - p1y, d1z = q1z - p1z;
+  const d2x = q2x - p2x, d2y = q2y - p2y, d2z = q2z - p2z;
+  const rx = p1x - p2x, ry = p1y - p2y, rz = p1z - p2z;
+  const a = d1x * d1x + d1y * d1y + d1z * d1z;
+  const e = d2x * d2x + d2y * d2y + d2z * d2z;
+  const f = d2x * rx + d2y * ry + d2z * rz;
+  const EPS = 1e-12;
+  let s = 0; let t = 0;
+  if (a <= EPS && e <= EPS) { s = 0; t = 0; }
+  else if (a <= EPS) { s = 0; t = Math.min(1, Math.max(0, f / e)); }
+  else {
+    const c = d1x * rx + d1y * ry + d1z * rz;
+    if (e <= EPS) { t = 0; s = Math.min(1, Math.max(0, -c / a)); }
+    else {
+      const b = d1x * d2x + d1y * d2y + d1z * d2z;
+      const denom = a * e - b * b;
+      s = denom > EPS ? Math.min(1, Math.max(0, (b * f - c * e) / denom)) : 0;
+      t = (b * s + f) / e;
+      if (t < 0) { t = 0; s = Math.min(1, Math.max(0, -c / a)); }
+      else if (t > 1) { t = 1; s = Math.min(1, Math.max(0, (b - c) / a)); }
+    }
+  }
+  c1[0] = p1x + d1x * s; c1[1] = p1y + d1y * s; c1[2] = p1z + d1z * s;
+  c2[0] = p2x + d2x * t; c2[1] = p2y + d2y * t; c2[2] = p2z + d2z * t;
+  return Math.hypot(c1[0] - c2[0], c1[1] - c2[1], c1[2] - c2[2]);
 }
 
 /** parent[] via BFS from the root, plus subtree collection helpers. */
@@ -156,8 +199,8 @@ function parents(skel) {
   const seen = new Uint8Array(nodes.length);
   const q = [0];
   seen[0] = 1;
-  while (q.length) {
-    const i = q.shift();
+  for (let head = 0; head < q.length; head++) {
+    const i = q[head];
     for (const j of nodes[i].neighbors) if (!seen[j]) { seen[j] = 1; par[j] = i; q.push(j); }
   }
   return par;
