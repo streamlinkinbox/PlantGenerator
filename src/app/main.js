@@ -4,7 +4,7 @@ addEventListener('error', (e) => {
   if (hud) hud.textContent = `error: ${e.message}`;
 });
 
-const BUILD = '16:32:18';
+const BUILD = '17:00:20';
 console.log('%cPlantGenerator build ' + BUILD, 'color:#38e2a8;font-weight:bold');
 // the watchdog in index.html checks these two flags
 window.__PG_MODULE = BUILD;
@@ -19,6 +19,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { generateSkeleton, DEFAULTS, orderByGrowth, skeletonStats } from '../core/skeleton.js';
 import { skinSkeleton, SKIN_DEFAULTS } from '../core/skin.js';
+import { buildBarkPatch, PATCH_DEFAULTS } from '../core/barkpatch.js';
 
 // ---------------------------------------------------------------- parameters
 const shapeSpec = [
@@ -60,6 +61,29 @@ const skinSpec = [
   ['hubFit', 0, 1, 0.05],
 ];
 
+// flat bark-patch lab: a hierarchical crack network turned into scales
+const patchSpec = [
+  ['seed', 1, 999, 1],
+  ['patchSize', 0.3, 4, 0.1],
+  ['patchRes', 80, 420, 20],
+  ['scaleSize', 0.03, 0.3, 0.005],
+  ['sizeSpread', 0, 1, 0.05],
+  ['anisotropy', 0.4, 3, 0.1],
+  ['wander', 0.1, 1.2, 0.05],
+  ['fissureWidth', 0.05, 0.5, 0.01],
+  ['fissureDepth', 0.2, 2, 0.05],
+  ['scaleThickness', 0.004, 0.06, 0.002],
+  ['dome', 0, 1.5, 0.05],
+  ['lift', 0, 1.2, 0.05],
+  ['tilt', 0, 1, 0.05],
+  ['shed', 0, 0.6, 0.01],
+  ['shedDepth', 0.1, 1.5, 0.05],
+  ['craze', 0, 1.2, 0.05],
+  ['crazeScale', 0.12, 0.7, 0.02],
+  ['grain', 0, 0.5, 0.02],
+];
+const patchParams = { ...PATCH_DEFAULTS };
+
 const params = { ...DEFAULTS, ...SKIN_DEFAULTS, subdivisions: 1 };
 const sliders = {};
 
@@ -87,6 +111,26 @@ function buildControls(host, spec) {
 buildControls(document.getElementById('treeControls'), shapeSpec);
 buildControls(document.getElementById('woodControls'), woodSpec);
 buildControls(document.getElementById('skinControls'), skinSpec);
+buildPatchControls(document.getElementById('patchControls'), patchSpec);
+
+function buildPatchControls(host, spec) {
+  for (const [key, min, max, step] of spec) {
+    const wrap = document.createElement('div');
+    wrap.className = 'ctrl';
+    wrap.innerHTML = `<div class="lbl"><span>${key.replace(/([A-Z])/g, ' $1').toLowerCase()}</span><b>${patchParams[key]}</b></div>`;
+    const input = document.createElement('input');
+    input.type = 'range';
+    input.min = min; input.max = max; input.step = step; input.value = patchParams[key];
+    const out = wrap.querySelector('b');
+    input.addEventListener('input', () => {
+      patchParams[key] = parseFloat(input.value);
+      out.textContent = patchParams[key];
+      if (patchOn) schedulePatch();
+    });
+    wrap.appendChild(input);
+    host.appendChild(wrap);
+  }
+}
 
 // ---------------------------------------------------------------- three setup
 const view = document.getElementById('view');
@@ -143,6 +187,10 @@ let stage = 0;
 let skinStale = true;
 let lastTimes = { skelMs: 0, skinMs: 0, subMs: 0 };
 let previewOnly = false;
+let patchOn = false;
+let patchMesh = null;
+let objPatch = null;
+let patchTimer = null;
 
 const skeletonOnly = () => stage < 2;
 
@@ -190,6 +238,64 @@ function download(name, text) {
   a.href = url; a.download = name; a.click();
   URL.revokeObjectURL(url);
 }
+
+// ------------------------------------------------------------- bark patch lab
+const matPatch = new THREE.MeshStandardMaterial({
+  vertexColors: true, roughness: 0.92, metalness: 0.0,
+});
+
+function buildPatch() {
+  const t0 = performance.now();
+  const res = { ...patchParams, patchRes: Math.round(patchParams.patchRes), seed: Math.round(patchParams.seed) };
+  const out = buildBarkPatch(res);
+  patchMesh = out.mesh;
+  if (objPatch) { objPatch.geometry.dispose(); scene.remove(objPatch); }
+  const g = meshGeometry(patchMesh);
+  g.setAttribute('color', new THREE.BufferAttribute(out.colors, 3));
+  objPatch = new THREE.Mesh(g, matPatch);
+  objPatch.position.y = 0.02;
+  scene.add(objPatch);
+  const st = out.stats;
+  document.getElementById('stats').innerHTML = `
+BARK PATCH (flat lab)
+scales     <b>${st.scales}</b> · <b>${st.shedScales}</b> shed
+junctions  T <b>${st.junctions.T}</b> · X ${st.junctions.X} · Y ${st.junctions.Y}
+           (T-dominated = hierarchical sequential fracture)
+scale size <b>${st.scaleSizeWorld.toFixed(3)}</b> world · raster ${st.rasterRes}²
+mesh       <b>${st.quads}</b> quads
+build      ${(performance.now() - t0).toFixed(0)} ms`;
+  document.getElementById('hud').textContent =
+    `bark patch — ${st.scales} scales, ${st.junctions.T} T-junctions\ndrag to orbit · scroll to zoom`;
+}
+
+function schedulePatch() {
+  clearTimeout(patchTimer);
+  patchTimer = setTimeout(buildPatch, 180);
+}
+
+function setPatchMode(on) {
+  patchOn = on;
+  document.getElementById('patchToggle').textContent = on ? '↩ back to the tree' : '🧪 Show bark patch';
+  skelGroup.visible = !on;
+  skinGroup.visible = !on;
+  grid.visible = !on;
+  if (objPatch) objPatch.visible = on;
+  if (on) {
+    if (!objPatch) buildPatch();
+    controls.target.set(0, 0, 0);
+    camera.position.set(patchParams.patchSize * 0.9, patchParams.patchSize * 0.9, patchParams.patchSize * 0.9);
+  } else {
+    controls.target.set(0, 3, 0);
+    camera.position.set(7, 5, 9);
+    applyStage();
+    report();
+  }
+}
+document.getElementById('patchToggle').addEventListener('click', () => setPatchMode(!patchOn));
+document.getElementById('exportPatch').addEventListener('click', () => {
+  if (!patchMesh) buildPatch();
+  download('patch.obj', patchMesh.toOBJ('bark_patch'));
+});
 
 // ---------------------------------------------------------------- geometry
 function disposeGroup(g) {
@@ -409,6 +515,7 @@ build      ${lastTimes.skinMs.toFixed(0)}ms skin · ${lastTimes.subMs.toFixed(0)
 }
 
 function applyStage() {
+  if (patchOn) return;
   const wire = document.getElementById('wire').checked;
   const keepSkel = document.getElementById('showSkel').checked;
   if (!objPoints) return;

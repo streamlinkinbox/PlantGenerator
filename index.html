@@ -13,7 +13,7 @@
       <header>
         <h1>Plant<span>Generator</span></h1>
         <p class="sub">skeleton vertices → box hubs → single all-quad skin</p>
-        <p class="sub build">build <b id="build">16:32:18</b> — if this is not the newest build, hard-reload (Ctrl+Shift+R)</p>
+        <p class="sub build">build <b id="build">17:00:20</b> — if this is not the newest build, hard-reload (Ctrl+Shift+R)</p>
       </header>
 
       <section>
@@ -41,6 +41,13 @@
       <section>
         <h2>Thickness <span class="tag">da Vinci / pipe model</span></h2>
         <div id="woodControls"></div>
+      </section>
+
+      <section>
+        <h2>Bark patch <span class="tag">lab · flat test area</span></h2>
+        <div class="row"><button id="patchToggle" class="wide">🧪 Show bark patch</button></div>
+        <div id="patchControls"></div>
+        <div class="row"><button id="exportPatch">⬇ patch.obj</button></div>
       </section>
 
       <section>
@@ -79,7 +86,7 @@
         var stage = window.__PG_MODULE ? 'the module loaded but init failed' : 'the module never executed';
         var box = document.getElementById('stats');
         var msg = '<span class="bad">APP DID NOT START</span>\n' + stage +
-          '\nexpected build 16:32:18\n' +
+          '\nexpected build 17:00:20\n' +
           (window.__PG_ERRORS.length ? '\n' + window.__PG_ERRORS.slice(0, 6).join('\n') : '\nno resource errors captured (if the tab was open while the server restarted, reload it)');
         if (box) box.innerHTML = msg;
         var hud = document.getElementById('hud');
