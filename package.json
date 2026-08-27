@@ -1,0 +1,33 @@
+{
+  "name": "plantgenerator",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "validate": "node scripts/validate.mjs",
+    "sweep": "node scripts/validate.mjs --sweep",
+    "render": "node scripts/render.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/streamlinkinbox/PlantGenerator.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/streamlinkinbox/PlantGenerator/issues"
+  },
+  "homepage": "https://github.com/streamlinkinbox/PlantGenerator#readme",
+  "dependencies": {
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "vite": "^8.2.2"
+  },
+  "type": "module"
+}

@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PlantGenerator — quad-topology tree skinner</title>
+    <link rel="stylesheet" href="/src/app/style.css" />
+  </head>
+  <body>
+    <div id="view"></div>
+
+    <aside id="panel">
+      <header>
+        <h1>Plant<span>Generator</span></h1>
+        <p class="sub">skeleton vertices → box hubs → single all-quad skin</p>
+      </header>
+
+      <section>
+        <h2>Stage</h2>
+        <div class="stages" id="stages">
+          <button data-stage="0" class="on">1 · Vertices</button>
+          <button data-stage="1">2 · Bones</button>
+          <button data-stage="2">3 · Hub boxes</button>
+          <button data-stage="3">4 · Quad cage</button>
+          <button data-stage="4">5 · Skin</button>
+        </div>
+        <div class="row">
+          <button id="grow" class="wide">▶ Replay growth</button>
+        </div>
+        <label class="check"><input type="checkbox" id="wire" checked /> quad wireframe</label>
+        <label class="check"><input type="checkbox" id="showSkel" /> keep skeleton visible</label>
+        <label class="check"><input type="checkbox" id="flat" /> flat shading</label>
+      </section>
+
+      <section>
+        <h2>Skin</h2>
+        <div id="skinControls"></div>
+      </section>
+
+      <section>
+        <h2>Growth</h2>
+        <div id="treeControls"></div>
+      </section>
+
+      <section>
+        <h2>Topology audit</h2>
+        <div id="stats" class="stats">…</div>
+      </section>
+
+      <section class="foot">
+        <div class="row">
+          <button id="reseed">🎲 New seed</button>
+          <button id="exportCage">⬇ cage.obj</button>
+          <button id="exportSub">⬇ skin.obj</button>
+        </div>
+      </section>
+    </aside>
+
+    <div id="hud"></div>
+    <script type="module" src="/src/app/main.js"></script>
+  </body>
+</html>
