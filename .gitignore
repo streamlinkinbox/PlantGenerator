@@ -1,4 +1,4 @@
-node_modules
-dist
-shots
 *.obj
+dist
+node_modules
+shots

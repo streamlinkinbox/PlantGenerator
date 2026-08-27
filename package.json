@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "validate": "node scripts/validate.mjs",
     "sweep": "node scripts/validate.mjs --sweep",
-    "render": "node scripts/render.mjs"
+    "render": "node scripts/render.mjs",
+    "serve": "vite build && vite preview"
   },
   "repository": {
     "type": "git",

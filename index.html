@@ -13,7 +13,7 @@
       <header>
         <h1>Plant<span>Generator</span></h1>
         <p class="sub">skeleton vertices → box hubs → single all-quad skin</p>
-        <p class="sub build">build <b id="build">15:33:11</b> — if this is not the newest build, hard-reload (Ctrl+Shift+R)</p>
+        <p class="sub build">build <b id="build">15:39:56</b> — if this is not the newest build, hard-reload (Ctrl+Shift+R)</p>
       </header>
 
       <section>
@@ -86,13 +86,13 @@
         var stage = window.__PG_MODULE ? 'the module loaded but init failed' : 'the module never executed';
         var box = document.getElementById('stats');
         var msg = '<span class="bad">APP DID NOT START</span>\n' + stage +
-          '\nexpected build 15:33:11\n' +
+          '\nexpected build 15:39:56\n' +
           (window.__PG_ERRORS.length ? '\n' + window.__PG_ERRORS.slice(0, 6).join('\n') : '\nno resource errors captured (if the tab was open while the server restarted, reload it)');
         if (box) box.innerHTML = msg;
         var hud = document.getElementById('hud');
         if (hud) hud.textContent = 'APP DID NOT START — see the topology audit box';
       }, 12000);
     </script>
-    <script type="module" src="/src/app/main.js?v=153311"></script>
+    <script type="module" src="/src/app/main.js"></script>
   </body>
 </html>

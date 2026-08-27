@@ -28,5 +28,15 @@ export default defineConfig({
       Expires: '0',
     },
   },
-  preview: { host: '0.0.0.0', port: 5173, allowedHosts: true },
+  build: { target: 'es2022', chunkSizeWarningLimit: 2000 },
+  // The preview is served from a BUILT bundle: filenames are content-hashed, so
+  // a stale copy cannot masquerade as the current one, and there is no dev
+  // transform cache to go out of sync with the files on disk.
+  preview: {
+    host: '0.0.0.0',
+    port: 5173,
+    strictPort: true,
+    allowedHosts: true,
+    headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0' },
+  },
 });
