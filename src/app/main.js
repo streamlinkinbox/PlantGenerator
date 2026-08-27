@@ -551,7 +551,7 @@ each closed ${flag(a.allClosed)} (${a.closed}/${a.plates} watertight)
 each quads  ${flag(a.allQuads)} · one shell ${flag(a.allSingle)} · χ=2 ${flag(a.allSphere)}
 no overlap  ${flag(b.overlaps === 0)} (${b.overlaps} interpenetrating pairs)
 no pinch    ${flag(a.pinched === 0)} · max aspect <b>${a.worstAspect.toFixed(1)}</b>:1
-cracks      T <b>${b.tJunctions}</b> · X <b>${b.xJunctions}</b> · ${b.splits} splits, ${b.primaryFissures || ''}
+cracks      T <b>${b.tJunctions}</b> · X <b>${b.xJunctions}</b> · ${b.splits} splits · ${b.primaryFissures} primary fissures
 plate size  <b>${(b.medianHeight || 0).toFixed(3)}</b> × <b>${(b.medianWidth || 0).toFixed(3)}</b> (${(b.aspect || 0).toFixed(1)}:1 median)
 coverage    <b>${(100 * b.plateArea / Math.max(b.cellArea, 1e-9)).toFixed(0)}%</b> of the barked surface
 shed/peeled <b>${b.shed}</b> shed · <b>${b.peeled}</b> peeling · ${b.missed} unseatable

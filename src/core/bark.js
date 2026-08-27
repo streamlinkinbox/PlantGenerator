@@ -544,7 +544,7 @@ export function buildBark(skel, skin, opts = {}) {
   const plates = [];
   const stats = {
     limbs: 0, cells: 0, plates: 0, shed: 0, peeled: 0, splits: 0,
-    cellArea: 0, plateArea: 0, tJunctions: 0, xJunctions: 0, dropped: 0, missed: 0, missNoHit: 0, missStep: 0, rejected: 0, quads: 0, vertices: 0,
+    cellArea: 0, plateArea: 0, primaryFissures: 0, tJunctions: 0, xJunctions: 0, dropped: 0, missed: 0, missNoHit: 0, missStep: 0, rejected: 0, quads: 0, vertices: 0,
     gridTris: grid ? grid.triangles : 0,
   };
   const sizes = [];
@@ -616,6 +616,7 @@ export function buildBark(skel, skin, opts = {}) {
       maxCells: Math.max(32, Math.round(O.barkMaxPlates)),
     });
     stats.cells += frag.stats.cells;
+    stats.primaryFissures += frag.stats.primaryFissures;
     stats.splits += frag.stats.splits;
     stats.tJunctions += frag.stats.tJunctions;
     stats.xJunctions += frag.stats.xJunctions;
