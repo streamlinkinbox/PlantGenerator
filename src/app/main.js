@@ -4,8 +4,12 @@ addEventListener('error', (e) => {
   if (hud) hud.textContent = `error: ${e.message}`;
 });
 
-const BUILD = '14:42:53';
+const BUILD = '15:03:25';
 console.log('%cPlantGenerator build ' + BUILD, 'color:#38e2a8;font-weight:bold');
+addEventListener('DOMContentLoaded', () => {
+  const el = document.getElementById('build');
+  if (el) el.textContent = BUILD;
+});
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
