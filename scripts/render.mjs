@@ -30,8 +30,24 @@ let lo = [1e9, 1e9, 1e9], hi = [-1e9, -1e9, -1e9];
 for (const p of out.positions) for (let i = 0; i < 3; i++) { lo[i] = Math.min(lo[i], p[i]); hi[i] = Math.max(hi[i], p[i]); }
 const center = V.mul(V.add(lo, hi), 0.5);
 const radius = V.len(V.sub(hi, lo)) * 0.5;
-const eye = V.add(center, V.mul([Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch)], radius * 2.6));
-const fwd = V.norm(V.sub(center, eye));
+let camCenter = center;
+let camDist = radius * 2.6;
+const worst = Number(arg('--worst', -1));
+if (worst >= 0) {
+  const w = mesh.worstFaces(24)[worst];
+  camCenter = mesh.faceCenter(w.fi);
+  camDist = mesh.geometryQuality().avgEdge * Number(arg('--zoom', 14));
+  console.log('worst face', w.fi, 'aspect', w.aspect.toFixed(2), 'at', camCenter.map((x) => x.toFixed(2)).join(','));
+}
+const focus = Number(arg('--focus', -1));
+if (focus >= 0) {
+  const js = skel.nodes.filter((n) => n.neighbors.length >= 3).sort((a, b) => b.r - a.r);
+  const n = js[Math.min(focus, js.length - 1)];
+  camCenter = n.p;
+  camDist = n.r * Number(arg('--zoom', 9));
+}
+const eye = V.add(camCenter, V.mul([Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), Math.cos(yaw) * Math.cos(pitch)], camDist));
+const fwd = V.norm(V.sub(camCenter, eye));
 const right = V.norm(V.cross(fwd, [0, 1, 0]));
 const up = V.cross(right, fwd);
 const f = (H * 0.5) / Math.tan(0.42);

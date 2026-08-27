@@ -28,34 +28,58 @@ Breadth-first recursive branching with phyllotaxis roll, gravitropism, per-segme
 length/radius falloff and a hard vertex budget. Three clean-up passes run before anything is
 skinned, and they are what make the skinning safe:
 
-* `limitJunctionDegree` — a hub box only has 6 faces, so no vertex may carry more than 6 bones.
-  Overcrowded junctions are split into two junctions joined by a short bone.
+* `limitJunctionDegree` — a hub box only has 6 faces (and needs good ones), so no vertex carries
+  more than 4 bones. Overcrowded junctions are split into two junctions joined by a short bone.
 * `separateJunctions` — **intersection handling at the source**: sibling bones leaving a junction
   are rotated apart (whole sub-tree rotates with them) until their angular separation is larger
   than what their radii need. Two branches can no longer leave in almost the same direction and
   interpenetrate.
 * `enforceBoneLength` — every bone is made long enough that the two hub boxes at its ends cannot
-  overlap; short bones are the number one cause of self-intersecting skins.
+  overlap, including room for the socket that sits beyond the box corners; short bones are the
+  number one cause of self-intersecting skins.
+* `resolveCollisions` — capsule/capsule tests on a uniform grid, using a **tree metric** so that
+  bones which are close *along the skeleton* (consecutive segments, siblings at a junction) are
+  allowed to touch while genuinely crossing branches are not. Offenders are rotated apart about
+  the junction they grew from; whatever still intersects afterwards is **self-pruned**. Result:
+  `0` intersecting branch pairs, verified in the audit.
+* `smoothChains` — Laplacian smoothing of degree-2 vertices; kinky skeletons fold quads.
 
-### 2. Skinning — B-Mesh / "skin modifier" style
+### 2. Skinning — B-Mesh / "skin modifier" style, with the split handled explicitly
 
-For every junction vertex (degree ≥ 3):
+Hubs are built lazily in breadth-first order **while** the limbs are swept, so every hub inherits
+the frame of the tube arriving at it. For every junction vertex (degree ≥ 3):
 
-1. build a **box** centred on the vertex, `a0` aligned with the thickest limb;
-2. each outgoing bone claims **one distinct box face** — solved as an optimal assignment
-   (brute-force over the 6 faces) maximizing `dot(boneDir, faceNormal)`;
-3. that face is **extruded** into a socket ring: the face is removed, 4 side quads bridge the
-   original box corners to a 4-vertex loop placed on the bone axis. The box stays a closed solid,
-   the socket is welded into it — the branch is *part of* the trunk, not glued on top of it;
-4. faces nobody claimed stay as plain box faces, so the hub is always closed.
+1. build a **box** centred on the vertex, `a0` pointing back down the incoming bone (so
+   `FACES[0]` always belongs to the parent);
+2. **spin the box** about that bone until the parent socket loop lands exactly on the arriving
+   loop → residual twist 0. The box has 4-fold symmetry, so the leftover roll in (−45°, 45°] is
+   free: a 19-step search spends it on making sure **every child sits on a face that points the
+   way it grows**. Whatever roll is used is handed back to the sweeper and spread as a gentle
+   spiral over the limb's loops instead of one sheared row of quads;
+3. each remaining bone claims **one distinct box face** — optimal assignment over the 5 free
+   faces maximizing alignment;
+4. box corners are **fitted to the envelope of the outgoing branches** (each contribution clamped
+   by that branch's own socket plane, and the corner-scale field smoothed over the cube graph) so
+   the crotch gets a real saddle/fillet instead of a blobby cube;
+5. the claimed face is **extruded** into a socket loop through a **graded collar**: the section
+   shrinks geometrically over 1–6 rows, so a fat trunk dropping onto a thin twig never does it in
+   one sheared row. The socket plane is always pushed clear of every corner of its own face, so a
+   loop can never land on a corner and collapse to a point;
+6. the ring frame is measured **around the face centre**, not the hub centre — measuring from the
+   hub centre projects a tilted face's four corners into a half-plane, which turns the corner
+   order into a bow tie and crosses the collar quads (this was the visible "branches squeezed to
+   a point" bug);
+7. faces nobody claimed stay as plain box faces, so the hub is always a closed solid.
 
-Limbs (chains of degree-2 vertices) are swept as quad tubes with a **parallel-transport frame**
-(no twist accumulation) and a loop budget (`loopSpacing` / `maxTurn`) so loops only appear where
-curvature actually needs them. At the far end the tube's loop is **rotationally matched** against
-the target socket loop (4 candidate offsets, minimum total distance) before bridging, so the quad
-loops line up with no seam and no crossed quads. Tips get a taper + one quad cap.
+Limbs (chains of degree-2 vertices) are **uniformly resampled** between the two socket planes
+(even spacing → even quads, never closer than 0.8 local radii) and swept with a
+**parallel-transport frame**. At the far end the loop is **rotationally matched** against the
+socket loop before bridging. Tips taper over evenly spaced loops into one quad cap.
 
 Everything is emitted into a single `QuadMesh`, welded once, and that is the deliverable mesh.
+
+These passes alternate (length fix → separate → length fix → separate + prune) because pushing
+one constraint can break the other.
 
 ### 3. Subdivision
 
@@ -68,12 +92,15 @@ pre-compensated (`radiusCompensation`) for subdivision shrinkage.
 
 ```
 $ npm run validate -- --seed 7 --subdiv 2
-skeleton : { vertices: 3422, bones: 3421, junctions: 508, tips: 529 }
-cage     : { vertices: 21308, faces: 21306, quadsOnly: true,
+skeleton : { vertices: 3382, bones: 3381, junctions: 503, tips: 521 }
+cage     : { vertices: 35424, faces: 35422, quadsOnly: true,
              boundaryEdges: 0, nonManifoldEdges: 0, flippedEdges: 0,
              shells: 1, looseVertices: 0, euler: 2, genus: 0,
              watertight: true, singleMesh: true }
-valence  : { '3': 2116, '4': 17096, '5': 2084, '6': 12 }
+quality  : { maxAspect: 6.16, slivers: 0, pinched: 0, clean: true }
+overlaps : { pairs: 0, worstPenetration: 0 }   (385 found and fixed while growing)
+valence  : { '3': 2084, '4': 31280, '5': 2044, '6': 16 }
+subdiv x2: 566754 v / 566752 quads, still 1 shell, χ=2, watertight
 ```
 
 * **quads only** — zero triangles, zero n-gons, at every subdivision level
@@ -81,11 +108,22 @@ valence  : { '3': 2116, '4': 17096, '5': 2084, '6': 12 }
 * **manifold + consistently wound** — 0 non-manifold edges, 0 duplicated directed edges
 * **one mesh** — 1 connected shell, χ = 2, genus 0 (a topological sphere)
 * **no loose vertices**
-* ~80 % of vertices are regular (valence 4); the poles are the unavoidable 3/5-valence
+* ~88 % of vertices are regular (valence 4); the poles are the unavoidable 3/5-valence
   vertices around each junction hub
 
-`npm run sweep` (40 seeds) and `--stress` (30 randomized parameter sets, including extreme
-branch counts, angles and radii) both pass all of the above.
+Geometry is audited separately from topology, because a mesh can be topologically perfect and
+still be garbage:
+
+* **no pinched quads** — no quad has a collapsed edge (this used to happen where a socket loop
+  landed on a box corner: aspect ratios up to 1094:1). Now `maxAspect ≈ 6:1`
+* **no mirrored sockets** — every socket loop is wound the same way as its bone, so no bridge
+  ever gets a half-quad twist
+* **no intersecting branches** — 0 capsule-overlapping bone pairs after resolution
+
+`npm run sweep` (40 seeds) passes all of the above. `--stress` (30 randomized parameter sets)
+passes topology, overlap and pinch checks; deliberately absurd combinations (a trunk thinner than
+its own twigs, 80° branch angles on a 1-unit trunk) can still leave a handful of sliver quads
+around 15:1 in the control cage.
 
 ## Headless tooling
 

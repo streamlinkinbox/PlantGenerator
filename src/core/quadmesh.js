@@ -2,7 +2,7 @@
 // Faces are always arrays of exactly 4 vertex indices, wound counter-clockwise
 // when seen from outside the surface.
 
-import { add, mul, dist } from './vec3.js';
+import { add, sub, mul, dist, cross, dot, len, norm } from './vec3.js';
 
 const key = (a, b) => (a < b ? a * 0x100000 + b : b * 0x100000 + a);
 
@@ -200,6 +200,80 @@ export class QuadMesh {
     const hist = {};
     for (const v of val.values()) hist[v] = (hist[v] || 0) + 1;
     return hist;
+  }
+
+  /**
+   * Per-quad geometric quality. Topology can be perfect while the shapes are
+   * garbage, so this is audited separately:
+   *  - sliver  : aspect ratio (longest / shortest edge) above `aspectLimit`
+   *  - pinched : a quad with a (near) zero-length edge -> the "squeezed to a
+   *              point" artefact
+   *  - warp    : angle between the two triangle normals of the quad
+   */
+  geometryQuality(aspectLimit = 10, warpLimit = 50) {
+    let minEdge = Infinity;
+    let maxAspect = 0;
+    let maxWarp = 0;
+    let slivers = 0;
+    let pinched = 0;
+    let warped = 0;
+    let worst = { face: -1, aspect: 0 };
+    let scale = 0;
+    for (const f of this.faces) {
+      const p = f.map((i) => this.positions[i]);
+      const e = [dist(p[0], p[1]), dist(p[1], p[2]), dist(p[2], p[3]), dist(p[3], p[0])];
+      scale += (e[0] + e[1] + e[2] + e[3]) * 0.25;
+    }
+    scale = scale / Math.max(this.faces.length, 1);
+    this.faces.forEach((f, fi) => {
+      const p = f.map((i) => this.positions[i]);
+      const e = [dist(p[0], p[1]), dist(p[1], p[2]), dist(p[2], p[3]), dist(p[3], p[0])];
+      const lo = Math.min(...e);
+      const hi = Math.max(...e);
+      minEdge = Math.min(minEdge, lo);
+      const aspect = hi / Math.max(lo, 1e-9);
+      if (lo < scale * 0.02) pinched++;
+      if (aspect > aspectLimit) slivers++;
+      if (aspect > worst.aspect) worst = { face: fi, aspect };
+      maxAspect = Math.max(maxAspect, aspect);
+      const n1 = cross(sub(p[1], p[0]), sub(p[2], p[0]));
+      const n2 = cross(sub(p[2], p[0]), sub(p[3], p[0]));
+      if (len(n1) > 1e-12 && len(n2) > 1e-12) {
+        const c = Math.max(-1, Math.min(1, dot(norm(n1), norm(n2))));
+        const w = (Math.acos(c) * 180) / Math.PI;
+        maxWarp = Math.max(maxWarp, w);
+        if (w > warpLimit) warped++;
+      }
+    });
+    return {
+      avgEdge: scale,
+      minEdge,
+      maxAspect,
+      maxWarpDeg: maxWarp,
+      slivers,
+      pinched,
+      warped,
+      worstFace: worst.face,
+      clean: pinched === 0 && slivers === 0,
+    };
+  }
+
+  /** Centroid of a face (used by the QC renderer to aim at a bad quad). */
+  faceCenter(fi) {
+    let s = [0, 0, 0];
+    for (const v of this.faces[fi]) s = add(s, this.positions[v]);
+    return mul(s, 0.25);
+  }
+
+  /** Faces sorted worst-first by aspect ratio. */
+  worstFaces(count = 10) {
+    const scored = this.faces.map((f, fi) => {
+      const p = f.map((i) => this.positions[i]);
+      const e = [dist(p[0], p[1]), dist(p[1], p[2]), dist(p[2], p[3]), dist(p[3], p[0])];
+      return { fi, aspect: Math.max(...e) / Math.max(Math.min(...e), 1e-9) };
+    });
+    scored.sort((a, b) => b.aspect - a.aspect);
+    return scored.slice(0, count);
   }
 
   /** Catmull-Clark subdivision. Quad-in => quad-out, stays manifold. */

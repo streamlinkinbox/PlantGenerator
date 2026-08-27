@@ -4,6 +4,7 @@
 
 import { makeRng } from './rng.js';
 import * as V from './vec3.js';
+import { resolveCollisions, collisionReport } from './collide.js';
 
 export const DEFAULTS = {
   seed: 7,
@@ -25,6 +26,8 @@ export const DEFAULTS = {
   splitCount: 2,         // extra forks at the end of a span
   wobble: 0.06,
   maxVertices: 20000, // hard budget: branches queue breadth-first and stop here
+  collisionClearance: 1.32, // capsule radius multiplier used for overlap tests
+  selfPrune: 1,       // 1 = delete branches that still overlap after pushing
 };
 
 let uid = 0;
@@ -38,6 +41,9 @@ function makeNode(p, r) {
  */
 export function generateSkeleton(userParams = {}) {
   const P = { ...DEFAULTS, ...userParams };
+  // sanity clamps: a twig can never be fatter than the trunk it hangs on
+  P.minRadius = Math.min(P.minRadius, P.trunkRadius * 0.45);
+  P.radiusFalloff = Math.min(Math.max(P.radiusFalloff, 0.3), 0.95);
   const rnd = makeRng(P.seed);
   uid = 0;
 
@@ -135,10 +141,39 @@ export function generateSkeleton(userParams = {}) {
   }
 
   const skel = { nodes, bones, params: P };
-  limitJunctionDegree(skel, 6);
+  limitJunctionDegree(skel, 4);
   enforceRadiusMonotonic(skel);
   separateJunctions(skel);
+  smoothChains(skel, 2, 0.28);
+  // Lengthening bones can push branches back into each other, so relax first
+  // (rotation only), then do the final pass AFTER the last length fix - that
+  // pass ends with a prune loop, which is what guarantees a clean result.
+  const stats = { initial: 0, rotated: 0, pruned: 0, remaining: 0 };
+  const big = nodes.length > 4000; // keep the interactive rebuild responsive
+  for (let pass = 0; pass < (big ? 1 : 2); pass++) {
+    enforceBoneLength(skel);
+    const r = resolveCollisions(skel, {
+      clearance: P.collisionClearance,
+      iterations: big ? 6 : 12,
+      prune: false,
+    });
+    if (pass === 0) stats.initial = r.initial;
+    stats.rotated += r.rotated;
+    if (r.remaining === 0) break;
+  }
   enforceBoneLength(skel);
+  const last = resolveCollisions(skel, {
+    clearance: P.collisionClearance,
+    iterations: big ? 4 : 8,
+    prune: !!P.selfPrune,
+  });
+  stats.rotated += last.rotated;
+  stats.pruned += last.pruned;
+  stats.remaining = last.remaining;
+  skel.collisions = stats;
+  // audit at the radius the *surface* actually occupies (the resolver works
+  // with a safety margin on top of that)
+  skel.overlap = collisionReport(skel, P.collisionClearance * 0.8);
   return skel;
 }
 
@@ -147,7 +182,7 @@ export function generateSkeleton(userParams = {}) {
  * bones. Over-crowded junctions are split into two junctions joined by a short
  * bone - the classic fix, and it keeps the skin all-quad.
  */
-export function limitJunctionDegree(skel, max = 6) {
+export function limitJunctionDegree(skel, max = 4) {
   const { nodes, bones } = skel;
   const parent = new Array(nodes.length).fill(-1);
   const seen = new Uint8Array(nodes.length);
@@ -215,7 +250,9 @@ export function limitJunctionDegree(skel, max = 6) {
     for (const j of nodes[i].neighbors) {
       if (visited[j]) continue;
       visited[j] = 1;
-      nodes[j].r = Math.min(nodes[j].r, nodes[i].r * 0.995);
+      // clamp, never decay: multiplying by a factor per vertex used to shrink
+      // long chains down to nothing and made needle-thin quads at the tips
+      nodes[j].r = Math.max(skel.params.minRadius, Math.min(nodes[j].r, nodes[i].r));
       stack.push(j);
     }
   }
@@ -298,9 +335,11 @@ function enforceBoneLength(skel) {
     for (const [a, b] of bones) {
       const na = nodes[a];
       const nb = nodes[b];
+      // a junction end needs room for its box AND for the socket that sits
+      // beyond the box corners, otherwise the collar quads pinch
       const need =
-        hubExtent(na) * (na.neighbors.length >= 3 ? 1 : 0.35) +
-        hubExtent(nb) * (nb.neighbors.length >= 3 ? 1 : 0.35) +
+        hubExtent(na) * (na.neighbors.length >= 3 ? 2.7 : 0.35) +
+        hubExtent(nb) * (nb.neighbors.length >= 3 ? 2.7 : 0.35) +
         1e-3;
       const d = V.sub(nb.p, na.p);
       const l = V.len(d);
@@ -311,6 +350,25 @@ function enforceBoneLength(skel) {
       fixed++;
     }
     if (!fixed) break;
+  }
+}
+
+/**
+ * Laplacian smoothing of degree-2 (chain) vertices only. Junctions and tips are
+ * pinned. Kinky skeletons produce folded quads, so this is a geometry-quality
+ * pass, not a cosmetic one.
+ */
+export function smoothChains(skel, iterations = 2, factor = 0.28) {
+  const { nodes } = skel;
+  for (let it = 0; it < iterations; it++) {
+    const next = nodes.map((n) => n.p);
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      if (n.neighbors.length !== 2) continue;
+      const mid = V.mul(V.add(nodes[n.neighbors[0]].p, nodes[n.neighbors[1]].p), 0.5);
+      next[i] = V.lerp(n.p, mid, factor);
+    }
+    for (let i = 0; i < nodes.length; i++) nodes[i].p = next[i];
   }
 }
 
@@ -356,6 +414,8 @@ export function orderByGrowth(skel) {
   order.sort((a, b) => distArr[a] - distArr[b]);
   return { order, dist: distArr, maxDist: Math.max(...distArr, 1e-6) };
 }
+
+export { collisionReport };
 
 export function skeletonStats(skel) {
   let junctions = 0;

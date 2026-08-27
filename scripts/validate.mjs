@@ -15,35 +15,42 @@ const arg = (k, d) => {
 
 function run(seed, subdiv, params = {}) {
   const skel = generateSkeleton({ seed, ...params });
-  const { mesh } = skinSkeleton(skel);
+  const skin = skinSkeleton(skel);
+  const mesh = skin.mesh;
   const cage = mesh.validate();
+  const quality = mesh.geometryQuality();
   const sub = subdiv > 0 ? mesh.subdivide(subdiv) : mesh;
   const fine = sub.validate();
-  return { skel, mesh, sub, cage, fine };
+  return { skel, mesh, sub, cage, fine, quality, skin };
 }
+
+const passes = (c, q, skel, skin) =>
+  c.watertight && c.singleMesh && c.quadsOnly && c.looseVertices === 0 && c.genus === 0 &&
+  q.pinched === 0 && q.maxAspect < 25 &&
+  skel.overlap.pairs === 0 && skin.backwardSockets === 0;
 
 const seed = Number(arg('--seed', 7));
 const subdiv = Number(arg('--subdiv', 2));
 
 if (args.includes('--sweep')) {
   let bad = 0;
-  console.log('seed  skelV  cageV  cageF  quads watertight single  poles');
+  console.log('seed   cageV  cageF shells open flip  aspect sliv pinch overlap twist');
   for (let s = 1; s <= 40; s++) {
-    const { mesh, cage } = run(s, 0);
-    const hist = mesh.valenceHistogram();
-    const poles = Object.entries(hist).filter(([k]) => Number(k) !== 4)
-      .reduce((a, [, v]) => a + v, 0);
-    const ok = cage.watertight && cage.singleMesh && cage.quadsOnly && cage.looseVertices === 0;
+    const { cage, quality, skel, skin } = run(s, 0);
+    const ok = passes(cage, quality, skel, skin);
     if (!ok) bad++;
     console.log(
       String(s).padStart(4),
-      String(cage.vertices).padStart(6),
-      String(cage.vertices).padStart(6),
-      String(cage.faces).padStart(6),
-      String(cage.quadsOnly).padStart(6),
-      String(cage.watertight).padStart(10),
-      String(cage.singleMesh).padStart(6),
-      String(poles).padStart(6),
+      String(cage.vertices).padStart(7),
+      String(cage.faces).padStart(7),
+      String(cage.shells).padStart(6),
+      String(cage.boundaryEdges).padStart(5),
+      String(cage.flippedEdges).padStart(4),
+      quality.maxAspect.toFixed(1).padStart(7),
+      String(quality.slivers).padStart(5),
+      String(quality.pinched).padStart(5),
+      String(skel.overlap.pairs).padStart(7),
+      String(skin.backwardSockets).padStart(5),
       ok ? '' : '  <-- FAIL'
     );
   }
@@ -73,18 +80,33 @@ if (args.includes('--stress')) {
       minRadius: rnd(0.008, 0.12),
       maxVertices: 6000,
     };
-    const { cage: c } = run(Math.floor(rnd(1, 9999)), 0, p);
-    const ok = c.watertight && c.singleMesh && c.quadsOnly && c.looseVertices === 0 && c.genus === 0;
-    if (!ok) { bad++; console.log('FAIL', JSON.stringify(p), c); }
-    else console.log(`ok  lv${p.levels} ch${p.childrenPerBranch} sp${p.splitCount} -> ${c.faces} quads, 1 shell, chi=${c.euler}`);
+    const { cage: c, quality: q, skel: sk, skin: sn } = run(Math.floor(rnd(1, 9999)), 0, p);
+    const ok = passes(c, q, sk, sn);
+    if (!ok) {
+      bad++;
+      const why = [];
+      if (!c.watertight) why.push('open/nonmanifold');
+      if (!c.singleMesh) why.push(`shells=${c.shells}`);
+      if (!c.quadsOnly) why.push('non-quad');
+      if (c.genus !== 0) why.push(`genus=${c.genus}`);
+      if (q.pinched) why.push(`pinched=${q.pinched}`);
+      if (q.slivers) why.push(`slivers=${q.slivers} maxAspect=${q.maxAspect.toFixed(1)}`);
+      if (q.maxAspect >= 12) why.push(`aspect=${q.maxAspect.toFixed(1)}`);
+      if (sk.overlap.pairs) why.push(`overlaps=${sk.overlap.pairs} pen=${sk.overlap.worstPenetration.toFixed(2)}`);
+      if (sn.backwardSockets) why.push(`twistedSockets=${sn.backwardSockets}`);
+      console.log('FAIL', why.join(', '), '| faces', c.faces, '| lv', p.levels, 'trunkR', p.trunkRadius.toFixed(2), 'minR', p.minRadius.toFixed(3), 'ang', p.branchAngle.toFixed(0));
+    }
+    else console.log(`ok  lv${p.levels} ch${p.childrenPerBranch} sp${p.splitCount} -> ${c.faces} quads, 1 shell, chi=${c.euler}, aspect ${q.maxAspect.toFixed(1)}, 0 overlaps`);
   }
   console.log(bad === 0 ? '\nSTRESS PASS (30/30)' : `\n${bad}/30 FAILED`);
   process.exit(bad ? 1 : 0);
 }
 
-const { skel, mesh, sub, cage, fine } = run(seed, subdiv);
+const { skel, mesh, sub, cage, fine, quality } = run(seed, subdiv);
 console.log('skeleton :', skeletonStats(skel));
 console.log('cage     :', cage);
+console.log('quality  :', quality);
+console.log('overlaps :', skel.overlap, skel.collisions);
 console.log('valence  :', mesh.valenceHistogram());
 console.log(`subdiv x${subdiv}:`, fine);
 

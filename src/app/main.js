@@ -21,6 +21,7 @@ const treeSpec = [
   ['curl', 0, 0.8, 0.01],
   ['gravitropism', -0.4, 0.6, 0.01],
   ['minRadius', 0.005, 0.15, 0.005],
+  ['collisionClearance', 1.0, 2.0, 0.02],
 ];
 const skinSpec = [
   ['subdivisions', 0, 3, 1],
@@ -30,6 +31,9 @@ const skinSpec = [
   ['loopSpacing', 0.6, 6, 0.1],
   ['maxTurn', 3, 45, 1],
   ['tipTaper', 0.05, 1.0, 0.01],
+  ['hubFit', 0, 1, 0.05],
+  ['collarRows', 1, 3, 1],
+  ['minLoops', 1, 6, 1],
 ];
 
 const params = { ...DEFAULTS, ...SKIN_DEFAULTS, subdivisions: 1 };
@@ -273,10 +277,12 @@ function rebuild() {
 function report(skinned, out, times) {
   const v = cage.validate();
   const vf = out.validate();
+  const q = cage.geometryQuality();
   const s = skeletonStats(skel);
   const hist = cage.valenceHistogram();
   const poles = Object.entries(hist).filter(([k]) => +k !== 4).reduce((a, [, n]) => a + n, 0);
   const flag = (b) => `<span class="${b ? 'ok' : 'bad'}">${b ? 'PASS' : 'FAIL'}</span>`;
+  const col = skel.collisions || { initial: 0, pruned: 0 };
   document.getElementById('stats').innerHTML = `
 skeleton   <b>${s.vertices}</b> verts · <b>${s.junctions}</b> junctions · <b>${s.tips}</b> tips
 cage       <b>${v.vertices}</b> v / <b>${v.faces}</b> quads
@@ -286,6 +292,10 @@ watertight ${flag(v.boundaryEdges === 0)} (${v.boundaryEdges} open edges)
 manifold   ${flag(v.nonManifoldEdges === 0 && v.flippedEdges === 0)}
 single obj ${flag(v.shells === 1)} (${v.shells} shell)
 euler χ    <b>${v.euler}</b> · genus <b>${v.genus}</b>
+no overlap ${flag(skel.overlap.pairs === 0)} (${skel.overlap.pairs} pairs, ${col.initial} fixed, ${col.pruned} pruned)
+no twist   ${flag(skinned.backwardSockets === 0)} (${skinned.backwardSockets} mirrored sockets)
+no pinch   ${flag(q.pinched === 0)} · slivers <b>${q.slivers}</b>
+max aspect <b>${q.maxAspect.toFixed(1)}</b> : 1
 poles      <b>${poles}</b> / ${v.vertices} verts non-4-valence
 build      ${times.skelMs.toFixed(0)}ms skel · ${times.skinMs.toFixed(0)}ms skin · ${times.subMs.toFixed(0)}ms subdiv`;
   document.getElementById('hud').textContent =
