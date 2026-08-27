@@ -240,15 +240,58 @@
   </div>
 </div>
 
-<h2>7. What I am asking before writing code</h2>
-<p>Three decisions change the architecture, and I would rather have them from you than guess a fourth time:</p>
+<h2>7. What was actually built (stage 6 in the app)</h2>
+<p>The architecture of section 4 is implemented in <code>src/core/crack2d.js</code> (pattern) and
+<code>src/core/bark.js</code> (geometry). Decisions taken: pieces stay <b>separate solids</b>, the first
+bark family is the <b>irregular polygonal plate</b> of the photographs, and it is grown <b>straight onto the
+trunk and main limbs</b> rather than on a flat test slab.</p>
+
+<h3>Pipeline as shipped</h3>
 <ol>
-  <li><b>Pieces as separate objects, or welded into one mesh?</b> Separate is what you asked for and is better for shedding/simulation; a single merged mesh is easier to export as one object. Both are producible — it is one flag.</li>
-  <li><b>Which bark type first?</b> The two photographs are different families: irregular polygonal scales (plane/pine plates) vs. vertically elongated blocky plates. Same machinery, different anisotropy and shed rate.</li>
-  <li><b>Flat test area again, or straight onto the trunk?</b> A flat patch iterates in seconds and isolates the piece geometry from the curvature problems; the trunk is the real target.</li>
+  <li><b>Rails.</b> Every skeleton limb thicker than <code>barkMinRadius</code> is resampled with a
+  rotation-minimising frame and unrolled into a periodic strip (x = arc around, y = arc along). Both ends stop
+  clear of the hub box, because that is the one place where two limbs claim the same patch of surface.</li>
+  <li><b>Crack network.</b> Sequential fragmentation on polygons: a few primary fissures run the full height,
+  then a new crack nucleates inside the largest remaining fragment, meanders, and <i>terminates</i> on the
+  boundary it meets. Junctions are therefore T by construction — measured <b>T ≈ 1&nbsp;000+, X = 0</b> per
+  tree. Cuts that would land within 16 % of an existing corner snap onto it instead of leaving a 1 %-long
+  edge. Cell size follows the local stem radius, and the parameter-space aspect is corrected for the local
+  circumference so a plate has the same shape on a thin stem as on a fat one.</li>
+  <li><b>Fissure.</b> Each cell is inset by half the fissure width, so the crack is a real open gap with two
+  free walls, not a dark line.</li>
+  <li><b>Seating.</b> Every plate vertex is ray-cast from the stem axis onto the surface the renderer actually
+  draws, so plates sit on the root flare, the taper and the collars, not on an idealised cylinder. A plate
+  whose ring cannot be seated cleanly (a crotch, a twig in the way, a step in the radius) is discarded rather
+  than shipped floating or buried.</li>
+  <li><b>Solid.</b> Each plate is lofted into one closed all-quad solid: base ring sunk into the wood → outer
+  top ring (draft angle) → bevel ring → inner ring → apex, plus an underside. <b>3m + m quads per plate</b>,
+  no triangles, no n-gons, genus 0.</li>
+  <li><b>Bond state.</b> Bonded / peeling (one edge lifts and curls off the stem) / shed (the plate is absent
+  and the fresh wood shows through — the orange patches of the reference photographs).</li>
 </ol>
 
-<h2>References</h2>
+<h3>Measured, 10 seeds</h3>
+<ul>
+  <li>405–562 separate plates per tree, 32–45 k quads, ~79 quads per plate, ~2 s to build.</li>
+  <li>Every plate: watertight, all-quad, one shell, Euler χ = 2 — <b>100 %</b>, all seeds.</li>
+  <li>Interpenetrating pairs: <b>0</b> — proven in parameter space, where an overlap is the only way this
+  construction can intersect, and enforced by shrinking or dropping the offender.</li>
+  <li>Worst quad aspect ≤ 22:1, zero pinched quads (a plate that cannot meet that is rebuilt coarser, and
+  only then dropped).</li>
+  <li>Crack junctions: T ≈ 830–1 200, X = 0. Plate aspect ≈ 1.9:1 median. Coverage ≈ 67–74 % of the barked
+  surface, the rest being fissure, shed plates and unseatable spots.</li>
+</ul>
+
+<h3>Known limits, stated rather than hidden</h3>
+<ul>
+  <li>The hub box at every fork is left bare; bark that wraps a crotch needs a second parameterisation.</li>
+  <li>~15 % of cells on twiggy limbs are unseatable (a child branch is in the ray path) and are dropped, which
+  reads as extra shed patches.</li>
+  <li>Plates are single-layer. The layered rhytidome of section 4.5 (older plate under a younger one) is not
+  built yet.</li>
+</ul>
+
+<h2>References</h2><h2>References</h2>
 <ol class="refs">
 <li class="ref"><b>Bohn, Pauchard &amp; Couder</b> — <i>Hierarchical crack pattern as formed by successive domain divisions</i>, Phys. Rev. E 71 (2005). <a href="https://www.researchgate.net/publication/235540544_Hierarchical_crack_pattern_as_formed_by_successive_domain_divisions_I_Temporal_and_geometrical_hierarchy">link</a></li>
 <li class="ref"><b>Goehring &amp; Morris</b> — <i>Cracking mud, freezing dirt, and breaking rocks</i>, Physics Today 67(11) (2014). Later cracks curve to hit earlier ones at right angles; cell size ∝ layer depth. <a href="https://physicstoday.aip.org/features/cracking-mud-freezing-dirt-and-breaking-rocks">link</a></li>

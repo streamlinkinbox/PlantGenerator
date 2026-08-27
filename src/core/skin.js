@@ -215,6 +215,7 @@ export function skinSkeleton(skel, opts = {}) {
   }
 
   const hubs = [];
+  const tubes = []; // per-limb sweep frames, handed to the bark builder
   let backwardSockets = 0;
   const sockets = new Map(); // `${node}_${neighbour}` -> { ring, center, dir, u }
   const builtHub = new Set();
@@ -487,6 +488,10 @@ export function skinSkeleton(skel, opts = {}) {
     // ---- phase 2: emit, spreading `roll` evenly over the loops so the twist
     // is a gentle spiral instead of one sheared row of quads at the split
     let prevRing = startRing;
+    // frames of the emitted loops - the exact circles the tube was built on.
+    // The bark builder rides these, so its plates sit on the skin instead of
+    // on a guessed cylinder.
+    const frames = [{ p: startC, t: startD, u: startU, r: job.socket ? job.socket.radius : rads[0] }];
     for (let i = 0; i < plan.length; i++) {
       const f = plan[i];
       const frac = (i + 1) / (plan.length + 1);
@@ -494,7 +499,9 @@ export function skinSkeleton(skel, opts = {}) {
       const ring = mesh.addRing(ringPoints(f.p, f.t, u, f.r));
       mesh.bridgeRings(prevRing, ring, 'limb');
       prevRing = ring;
+      frames.push({ p: f.p, t: f.t, u, r: f.r });
     }
+    if (frames.length >= 2) tubes.push({ frames, endIsHub, node: endNode });
     const curC = plan.length ? plan[plan.length - 1].p : startC;
     const curD = plan.length ? plan[plan.length - 1].t : startD;
     const curU = plan.length
@@ -571,5 +578,5 @@ export function skinSkeleton(skel, opts = {}) {
   }
 
   mesh.weld(1e-7);
-  return { mesh, limbs, hubs, sockets, backwardSockets };
+  return { mesh, limbs, hubs, sockets, backwardSockets, tubes };
 }

@@ -7,6 +7,7 @@ import { dirname } from 'node:path';
 import zlib from 'node:zlib';
 import { generateSkeleton } from '../src/core/skeleton.js';
 import { skinSkeleton } from '../src/core/skin.js';
+import { buildBark, BARK_DEFAULTS } from '../src/core/bark.js';
 import * as V from '../src/core/vec3.js';
 
 const args = process.argv.slice(2);
@@ -22,8 +23,12 @@ const pitch = (Number(arg('--pitch', 8)) * Math.PI) / 180;
 
 const extra = JSON.parse(arg('--json', '{}'));
 const skel = generateSkeleton({ seed, ...extra });
-const { mesh } = skinSkeleton(skel);
+const skin = skinSkeleton(skel);
+const mesh = skin.mesh;
 const out = subdiv > 0 ? mesh.subdivide(subdiv) : mesh;
+const barkOpts = JSON.parse(arg('--bark', 'null'));
+const bark = barkOpts ? buildBark(skel, out, { ...BARK_DEFAULTS, ...barkOpts }) : null;
+if (bark) console.log('bark plates', bark.stats.plates, 'quads', bark.stats.quads, `${bark.stats.ms.toFixed(0)}ms`);
 
 // camera
 let lo = [1e9, 1e9, 1e9], hi = [-1e9, -1e9, -1e9];
@@ -75,6 +80,7 @@ for (let i = 0; i < W * H; i++) {
 }
 const zbuf = new Float32Array(W * H).fill(Infinity);
 const L = V.norm([0.45, 0.8, 0.5]);
+let PAL = [214, 178, 132];
 
 // per-vertex normals for Gouraud shading (flat quads at 3px look like noise)
 const VN = out.positions.map(() => [0, 0, 0]);
@@ -112,7 +118,7 @@ function triS(a, b, c, na, nb, nc) {
       if (z >= zbuf[idx]) continue;
       zbuf[idx] = z;
       const sh = w1 * sa + w2 * sb + w0 * sc;
-      color[idx * 3] = sh * 214; color[idx * 3 + 1] = sh * 178; color[idx * 3 + 2] = sh * 132;
+      color[idx * 3] = sh * PAL[0]; color[idx * 3 + 1] = sh * PAL[1]; color[idx * 3 + 2] = sh * PAL[2];
     }
 }
 
@@ -125,7 +131,7 @@ function tri(a, b, c, n) {
   if (Math.abs(area) < 1e-9) return;
   const diff = Math.max(0, V.dot(n, L));
   const shade = 0.16 + 0.84 * diff;
-  const rgb = [shade * 214, shade * 178, shade * 132];
+  const rgb = [shade * PAL[0], shade * PAL[1], shade * PAL[2]];
   for (let y = miny; y <= maxy; y++)
     for (let x = minx; x <= maxx; x++) {
       const px = x + 0.5, py = y + 0.5;
@@ -141,18 +147,40 @@ function tri(a, b, c, n) {
     }
 }
 
-const proj = out.positions.map(project);
-for (const q of out.faces) {
-  const P = q.map((i) => out.positions[i]);
-  if (q.some((i) => proj[i][2] <= 0.01)) continue;
-  const n = V.norm(V.cross(V.sub(P[1], P[0]), V.sub(P[2], P[0])));
-  if (!has('--nocull') && V.dot(n, V.sub(P[0], eye)) > 0) continue; // backface
-  if (has('--flat')) {
-    tri(proj[q[0]], proj[q[1]], proj[q[2]], n);
-    tri(proj[q[0]], proj[q[2]], proj[q[3]], n);
-  } else {
-    triS(proj[q[0]], proj[q[1]], proj[q[2]], VN[q[0]], VN[q[1]], VN[q[2]]);
-    triS(proj[q[0]], proj[q[2]], proj[q[3]], VN[q[0]], VN[q[2]], VN[q[3]]);
+function drawMesh(m, pal) {
+  PAL = pal;
+  const vn = m.positions.map(() => [0, 0, 0]);
+  for (const q of m.faces) {
+    const p = q.map((i) => m.positions[i]);
+    const n = V.cross(V.sub(p[2], p[0]), V.sub(p[3], p[1]));
+    for (const i of q) vn[i] = V.add(vn[i], n);
+  }
+  for (let i = 0; i < vn.length; i++) vn[i] = V.len(vn[i]) > 1e-12 ? V.norm(vn[i]) : [0, 1, 0];
+  const pr = m.positions.map(project);
+  for (const q of m.faces) {
+    const P = q.map((i) => m.positions[i]);
+    if (q.some((i) => pr[i][2] <= 0.01)) continue;
+    const n = V.norm(V.cross(V.sub(P[1], P[0]), V.sub(P[2], P[0])));
+    if (!has('--nocull') && V.dot(n, V.sub(P[0], eye)) > 0) continue;
+    if (has('--flat')) {
+      tri(pr[q[0]], pr[q[1]], pr[q[2]], n);
+      tri(pr[q[0]], pr[q[2]], pr[q[3]], n);
+    } else {
+      triS(pr[q[0]], pr[q[1]], pr[q[2]], vn[q[0]], vn[q[1]], vn[q[2]]);
+      triS(pr[q[0]], pr[q[2]], pr[q[3]], vn[q[0]], vn[q[2]], vn[q[3]]);
+    }
+  }
+  return pr;
+}
+
+// wood first, then every bark plate as its own object
+const proj = drawMesh(out, has('--bark') ? [206, 122, 66] : [214, 178, 132]);
+if (bark) {
+  let k = 0;
+  for (const pl of bark.plates) {
+    const t = 0.72 + 0.5 * pl.shade;
+    drawMesh(pl.mesh, [126 * t, 122 * t, 112 * t]);
+    k++;
   }
 }
 
@@ -170,9 +198,19 @@ if (has('--wire')) {
       color[idx * 3] = rgb[0]; color[idx * 3 + 1] = rgb[1]; color[idx * 3 + 2] = rgb[2];
     }
   };
-  for (const [a, b] of out.edges()) {
-    if (proj[a][2] <= 0.01 || proj[b][2] <= 0.01) continue;
-    line(proj[a], proj[b], [30, 250, 190]);
+  if (!bark) {
+    for (const [a, b] of out.edges()) {
+      if (proj[a][2] <= 0.01 || proj[b][2] <= 0.01) continue;
+      line(proj[a], proj[b], [30, 250, 190]);
+    }
+  } else {
+    for (const pl of bark.plates) {
+      const pr = pl.mesh.positions.map(project);
+      for (const [a, b] of pl.mesh.edges()) {
+        if (pr[a][2] <= 0.01 || pr[b][2] <= 0.01) continue;
+        line(pr[a], pr[b], [30, 250, 190]);
+      }
+    }
   }
 }
 

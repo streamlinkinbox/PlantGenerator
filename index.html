@@ -14,7 +14,7 @@
         <h1>Plant<span>Generator</span></h1>
         <p class="sub">skeleton vertices → box hubs → single all-quad skin</p>
         <p class="sub"><a href="/bark-research.html" target="_blank" style="color:#38e2a8">→ bark research note</a></p>
-        <p class="sub build">build <b id="build">18:08:00</b> — if this is not the newest build, hard-reload (Ctrl+Shift+R)</p>
+        <p class="sub build">build <b id="build">21:12:58</b> — if this is not the newest build, hard-reload (Ctrl+Shift+R)</p>
       </header>
 
       <section>
@@ -25,6 +25,7 @@
           <button data-stage="2">3 · Hub boxes</button>
           <button data-stage="3">4 · Quad cage</button>
           <button data-stage="4">5 · Skin</button>
+          <button data-stage="5">6 · Bark</button>
         </div>
         <div class="row">
           <button id="grow" class="wide">▶ Replay growth</button>
@@ -50,6 +51,11 @@
       </section>
 
       <section>
+        <h2>Bark <span class="tag">separate plates, stage 6</span></h2>
+        <div id="barkControls"></div>
+      </section>
+
+      <section>
         <h2>Topology audit</h2>
         <div id="stats" class="stats">…</div>
       </section>
@@ -59,6 +65,7 @@
           <button id="reseed">🎲 New seed</button>
           <button id="exportCage">⬇ cage.obj</button>
           <button id="exportSub">⬇ skin.obj</button>
+          <button id="exportBark">⬇ bark.obj</button>
         </div>
       </section>
     </aside>
@@ -80,7 +87,7 @@
         var stage = window.__PG_MODULE ? 'the module loaded but init failed' : 'the module never executed';
         var box = document.getElementById('stats');
         var msg = '<span class="bad">APP DID NOT START</span>\n' + stage +
-          '\nexpected build 18:08:00\n' +
+          '\nexpected build 21:12:58\n' +
           (window.__PG_ERRORS.length ? '\n' + window.__PG_ERRORS.slice(0, 6).join('\n') : '\nno resource errors captured (if the tab was open while the server restarted, reload it)');
         if (box) box.innerHTML = msg;
         var hud = document.getElementById('hud');

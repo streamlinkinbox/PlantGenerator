@@ -4,7 +4,7 @@ addEventListener('error', (e) => {
   if (hud) hud.textContent = `error: ${e.message}`;
 });
 
-const BUILD = '18:08:00';
+const BUILD = '21:12:58';
 console.log('%cPlantGenerator build ' + BUILD, 'color:#38e2a8;font-weight:bold');
 // the watchdog in index.html checks these two flags
 window.__PG_MODULE = BUILD;
@@ -19,6 +19,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { generateSkeleton, DEFAULTS, orderByGrowth, skeletonStats } from '../core/skeleton.js';
 import { skinSkeleton, SKIN_DEFAULTS } from '../core/skin.js';
+import { buildBark, BARK_DEFAULTS, barkToOBJ, auditBark } from '../core/bark.js';
 
 // ---------------------------------------------------------------- parameters
 const shapeSpec = [
@@ -60,7 +61,27 @@ const skinSpec = [
   ['hubFit', 0, 1, 0.05],
 ];
 
-const params = { ...DEFAULTS, ...SKIN_DEFAULTS, subdivisions: 1 };
+// bark: every plate is its own closed all-quad solid (see core/bark.js)
+const barkSpec = [
+  ['barkPlateHeight', 0.06, 0.8, 0.01],
+  ['barkElongation', 0.6, 5, 0.1],
+  ['barkFissure', 0.002, 0.05, 0.001],
+  ['barkThickness', 0.005, 0.08, 0.001],
+  ['barkMeander', 0, 1, 0.02],
+  ['barkSizeVar', 0, 0.9, 0.02],
+  ['barkSizeGrade', 0, 1, 0.05],
+  ['barkShed', 0, 0.5, 0.01],
+  ['barkPeel', 0, 0.6, 0.01],
+  ['barkPeelAmount', 0, 3, 0.05],
+  ['barkDome', 0, 1, 0.02],
+  ['barkBevel', 0.1, 1, 0.05],
+  ['barkSeat', 0, 1.5, 0.05],
+  ['barkMinRadius', 0.02, 0.4, 0.005],
+  ['barkClearance', 0, 2.5, 0.05],
+  ['barkSeed', 1, 999, 1],
+];
+
+const params = { ...DEFAULTS, ...SKIN_DEFAULTS, ...BARK_DEFAULTS, subdivisions: 1 };
 const sliders = {};
 
 function buildControls(host, spec) {
@@ -73,12 +94,14 @@ function buildControls(host, spec) {
     input.min = min; input.max = max; input.step = step; input.value = params[key];
     const out = wrap.querySelector('b');
     const isSkinOnly = spec === skinSpec;
+    const isBarkOnly = spec === barkSpec;
     input.addEventListener('input', () => {
       params[key] = parseFloat(input.value);
       out.textContent = params[key];
+      if (isBarkOnly) { barkStale = true; scheduleBark(); return; }
       onParamChanged(isSkinOnly);
     });
-    input.addEventListener('change', () => onParamSettled());
+    input.addEventListener('change', () => { if (!isBarkOnly) onParamSettled(); });
     wrap.appendChild(input);
     host.appendChild(wrap);
     sliders[key] = { input, out };
@@ -87,6 +110,7 @@ function buildControls(host, spec) {
 buildControls(document.getElementById('treeControls'), shapeSpec);
 buildControls(document.getElementById('woodControls'), woodSpec);
 buildControls(document.getElementById('skinControls'), skinSpec);
+buildControls(document.getElementById('barkControls'), barkSpec);
 
 // ---------------------------------------------------------------- three setup
 const view = document.getElementById('view');
@@ -121,7 +145,8 @@ scene.add(grid);
 
 const skelGroup = new THREE.Group();
 const skinGroup = new THREE.Group();
-scene.add(skelGroup, skinGroup);
+const barkGroup = new THREE.Group();
+scene.add(skelGroup, skinGroup, barkGroup);
 
 // ---------------------------------------------------------------- materials
 const matPoints = new THREE.PointsMaterial({ size: 5, sizeAttenuation: false, vertexColors: true });
@@ -130,18 +155,23 @@ const matHub = new THREE.LineBasicMaterial({ color: 0xffb454, transparent: true,
 const matWire = new THREE.LineBasicMaterial({ color: 0x35ffc0, transparent: true, opacity: 0.55 });
 const matSurf = new THREE.MeshStandardMaterial({ color: 0xb08a5e, roughness: 0.78, metalness: 0.02 });
 const matCage = new THREE.MeshStandardMaterial({ color: 0x6f7f96, roughness: 0.9, flatShading: true });
+const matWood = new THREE.MeshStandardMaterial({ color: 0xa8642f, roughness: 0.85, metalness: 0.0 });
+const matBark = new THREE.MeshStandardMaterial({ roughness: 0.92, metalness: 0.0, vertexColors: true });
 
 // ---------------------------------------------------------------- state
 let skel = null;
 let cage = null;
 let fine = null;
 let skinned = null;
-let objPoints, objBones, objHubs, objCage, objCageWire, objSkin, objSkinWire;
+let objPoints, objBones, objHubs, objCage, objCageWire, objSkin, objSkinWire, objWood, objBark, objBarkWire;
+let bark = null;
+let barkStale = true;
+let barkTimer = null;
 let growth = null;
 let growT = 1;
 let stage = 0;
 let skinStale = true;
-let lastTimes = { skelMs: 0, skinMs: 0, subMs: 0 };
+let lastTimes = { skelMs: 0, skinMs: 0, subMs: 0, barkMs: 0 };
 let previewOnly = false;
 
 const skeletonOnly = () => stage < 2;
@@ -157,6 +187,7 @@ stageButtons.forEach((b) =>
       if (previewOnly) buildSkeleton(false); // upgrade the quick preview first
       buildSkin();
     }
+    if (stage === 5) ensureBark();
     if (stage <= 1) growT = Math.min(growT, 1);
     applyStage();
   })
@@ -182,6 +213,10 @@ document.getElementById('exportCage').addEventListener('click', () => {
 document.getElementById('exportSub').addEventListener('click', () => {
   ensureSkin();
   download('skin.obj', fine.toOBJ('tree_skin'));
+});
+document.getElementById('exportBark').addEventListener('click', () => {
+  ensureBark();
+  download('bark.obj', barkToOBJ(bark));
 });
 
 function download(name, text) {
@@ -325,9 +360,103 @@ function buildSkin() {
   objSkin = new THREE.Mesh(meshGeometry(fine), matSurf);
   objSkinWire = new THREE.LineSegments(wireGeometry(fine), matWire);
   skinGroup.add(objHubs, objCage, objCageWire, objSkin, objSkinWire);
+  objWood = new THREE.Mesh(meshGeometry(fine), matWood);
+  skinGroup.add(objWood);
   skinStale = false;
+  barkStale = true;
   report();
   applyStage();
+}
+
+// ---------------------------------------------------------------- stage 6
+/** Geometry for the bark: every plate is a separate closed solid. */
+function barkGeometry(b) {
+  let nv = 0;
+  let ni = 0;
+  for (const pl of b.plates) { nv += pl.mesh.positions.length; ni += pl.mesh.faces.length * 6; }
+  const pos = new Float32Array(nv * 3);
+  const col = new Float32Array(nv * 3);
+  const idx = new Uint32Array(ni);
+  const c = new THREE.Color();
+  let vo = 0;
+  let io = 0;
+  for (const pl of b.plates) {
+    const m = pl.mesh;
+    const ring = (m.positions.length - 2) / 4; // base | top | bevel | mid | 2 centres
+    // colour is per plate and per ring, not a texture: the walls sit in shadow,
+    // the weathered top face is paler, and each plate has its own tone
+    const h = 0.075 + (pl.shade - 0.5) * 0.03;
+    const sat = 0.10 + pl.shade * 0.12;
+    const lig = 0.30 + pl.shade * 0.20;
+    m.positions.forEach((p, i) => {
+      pos[(vo + i) * 3] = p[0];
+      pos[(vo + i) * 3 + 1] = p[1];
+      pos[(vo + i) * 3 + 2] = p[2];
+      const band = i >= m.positions.length - 2 ? 4 : Math.floor(i / ring);
+      const k = [0.52, 0.78, 0.95, 1.06, 1.12][Math.min(band, 4)];
+      c.setHSL(h, sat, Math.min(0.82, lig * k));
+      col[(vo + i) * 3] = c.r;
+      col[(vo + i) * 3 + 1] = c.g;
+      col[(vo + i) * 3 + 2] = c.b;
+    });
+    for (const f of m.faces) {
+      idx[io++] = vo + f[0]; idx[io++] = vo + f[1]; idx[io++] = vo + f[2];
+      idx[io++] = vo + f[0]; idx[io++] = vo + f[2]; idx[io++] = vo + f[3];
+    }
+    vo += m.positions.length;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  g.setIndex(new THREE.BufferAttribute(idx, 1));
+  g.computeVertexNormals();
+  return g;
+}
+
+function barkWireGeometry(b) {
+  let n = 0;
+  for (const pl of b.plates) n += pl.mesh.edges().length;
+  const pos = new Float32Array(n * 6);
+  let o = 0;
+  for (const pl of b.plates) {
+    const m = pl.mesh;
+    for (const [a, bb] of m.edges()) {
+      const A = m.positions[a];
+      const B = m.positions[bb];
+      pos.set([A[0], A[1], A[2], B[0], B[1], B[2]], o);
+      o += 6;
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  return g;
+}
+
+function buildBarkStage() {
+  const t0 = performance.now();
+  bark = buildBark(skel, fine, params);
+  lastTimes.barkMs = performance.now() - t0;
+  disposeGroup(barkGroup);
+  if (bark.plates.length) {
+    objBark = new THREE.Mesh(barkGeometry(bark), matBark);
+    objBarkWire = new THREE.LineSegments(barkWireGeometry(bark), matWire);
+    barkGroup.add(objBark, objBarkWire);
+  }
+  barkStale = false;
+  report();
+  applyStage();
+}
+
+function ensureBark() {
+  ensureSkin();
+  if (barkStale) buildBarkStage();
+}
+
+function scheduleBark() {
+  if (stage !== 5) return;
+  clearTimeout(barkTimer);
+  document.getElementById('hud').textContent = 'growing bark…';
+  barkTimer = setTimeout(() => ensureBark(), 120);
 }
 
 function ensureSkin() {
@@ -338,6 +467,7 @@ function ensureSkin() {
 function rebuild(quick) {
   buildSkeleton(quick);
   if (!skeletonOnly()) buildSkin();
+  if (stage === 5) ensureBark();
 }
 
 // While a slider is being dragged we only refresh what the current stage
@@ -405,7 +535,27 @@ euler χ    <b>${v.euler}</b> · genus <b>${v.genus}</b>
 no twist   ${flag(skinned.backwardSockets === 0)}
 no pinch   ${flag(q.pinched === 0)} · max aspect <b>${q.maxAspect.toFixed(1)}</b>:1
 poles      <b>${poles}</b> / ${v.vertices} non-4-valence
-build      ${lastTimes.skinMs.toFixed(0)}ms skin · ${lastTimes.subMs.toFixed(0)}ms subdiv`;
+build      ${lastTimes.skinMs.toFixed(0)}ms skin · ${lastTimes.subMs.toFixed(0)}ms subdiv${barkReport()}`;
+}
+
+function barkReport() {
+  if (stage !== 5) return '';
+  if (barkStale || !bark) return `\n<span class="dim">bark: switch to stage 6 to grow it</span>`;
+  const a = auditBark(bark);
+  const b = bark.stats;
+  const flag = (ok) => `<span class="${ok ? 'ok' : 'bad'}">${ok ? 'PASS' : 'FAIL'}</span>`;
+  return `
+
+<b>bark</b>      <b>${b.plates}</b> separate plates · <b>${b.quads}</b> quads (${a.perPlateQuads.toFixed(0)}/plate)
+each closed ${flag(a.allClosed)} (${a.closed}/${a.plates} watertight)
+each quads  ${flag(a.allQuads)} · one shell ${flag(a.allSingle)} · χ=2 ${flag(a.allSphere)}
+no overlap  ${flag(b.overlaps === 0)} (${b.overlaps} interpenetrating pairs)
+no pinch    ${flag(a.pinched === 0)} · max aspect <b>${a.worstAspect.toFixed(1)}</b>:1
+cracks      T <b>${b.tJunctions}</b> · X <b>${b.xJunctions}</b> · ${b.splits} splits, ${b.primaryFissures || ''}
+plate size  <b>${(b.medianHeight || 0).toFixed(3)}</b> × <b>${(b.medianWidth || 0).toFixed(3)}</b> (${(b.aspect || 0).toFixed(1)}:1 median)
+coverage    <b>${(100 * b.plateArea / Math.max(b.cellArea, 1e-9)).toFixed(0)}%</b> of the barked surface
+shed/peeled <b>${b.shed}</b> shed · <b>${b.peeled}</b> peeling · ${b.missed} unseatable
+bark build  ${lastTimes.barkMs.toFixed(0)}ms`;
 }
 
 function applyStage() {
@@ -421,6 +571,11 @@ function applyStage() {
     objCageWire.visible = (stage === 2 || stage === 3) && wire;
     objSkin.visible = stage === 4;
     objSkinWire.visible = stage === 4 && wire;
+    objWood.visible = stage === 5;
+  }
+  if (objBark) {
+    objBark.visible = stage === 5;
+    objBarkWire.visible = stage === 5 && wire;
   }
   objBones.visible = stage <= 1 || keepSkel;
   matBones.opacity = stage === 0 ? 0.35 : 0.9;
@@ -430,7 +585,8 @@ function applyStage() {
      'bones — the vertices connected into limbs',
      'hub boxes — a box fitted at every fork',
      'quad cage — boxes extruded + tubes stitched (1 shell)',
-     'skin — Catmull-Clark of that same all-quad cage'][stage] ??
+     'skin — Catmull-Clark of that same all-quad cage',
+     'bark — every plate a separate closed all-quad solid on the wood'][stage] ??
     `stage ${stage} (stale bundle? hard-reload)`;
   document.getElementById('hud').textContent = `${label}\ndrag to orbit · scroll to zoom`;
 }
