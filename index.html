@@ -13,7 +13,7 @@
       <header>
         <h1>Plant<span>Generator</span></h1>
         <p class="sub">skeleton vertices → box hubs → single all-quad skin</p>
-        <p class="sub build">build <b id="build">15:39:56</b> — if this is not the newest build, hard-reload (Ctrl+Shift+R)</p>
+        <p class="sub build">build <b id="build">16:03:26</b> — if this is not the newest build, hard-reload (Ctrl+Shift+R)</p>
       </header>
 
       <section>
@@ -86,7 +86,7 @@
         var stage = window.__PG_MODULE ? 'the module loaded but init failed' : 'the module never executed';
         var box = document.getElementById('stats');
         var msg = '<span class="bad">APP DID NOT START</span>\n' + stage +
-          '\nexpected build 15:39:56\n' +
+          '\nexpected build 16:03:26\n' +
           (window.__PG_ERRORS.length ? '\n' + window.__PG_ERRORS.slice(0, 6).join('\n') : '\nno resource errors captured (if the tab was open while the server restarted, reload it)');
         if (box) box.innerHTML = msg;
         var hud = document.getElementById('hud');

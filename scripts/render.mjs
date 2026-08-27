@@ -153,7 +153,7 @@ for (const q of out.faces) {
   const P = q.map((i) => out.positions[i]);
   if (q.some((i) => proj[i][2] <= 0.01)) continue;
   const n = V.norm(V.cross(V.sub(P[1], P[0]), V.sub(P[2], P[0])));
-  if (V.dot(n, V.sub(P[0], eye)) > 0) continue; // backface
+  if (!has('--nocull') && V.dot(n, V.sub(P[0], eye)) > 0) continue; // backface
   if (has('--flat')) {
     tri(proj[q[0]], proj[q[1]], proj[q[2]], n);
     tri(proj[q[0]], proj[q[2]], proj[q[3]], n);

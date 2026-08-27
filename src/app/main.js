@@ -4,7 +4,7 @@ addEventListener('error', (e) => {
   if (hud) hud.textContent = `error: ${e.message}`;
 });
 
-const BUILD = '15:39:56';
+const BUILD = '16:03:26';
 console.log('%cPlantGenerator build ' + BUILD, 'color:#38e2a8;font-weight:bold');
 // the watchdog in index.html checks these two flags
 window.__PG_MODULE = BUILD;
@@ -67,6 +67,10 @@ const barkSpec = [
   ['furrowWidth', 0.1, 0.5, 0.01],
   ['growth', 1.05, 2.5, 0.05],
   ['reticulation', 0, 0.6, 0.01],
+  ['plateAspect', 1.5, 8, 0.1],
+  ['plateLift', 0, 0.6, 0.02],
+  ['plateDome', 0, 1.0, 0.05],
+  ['wallPower', 1.2, 4, 0.1],
   ['fibreStrength', 0, 8, 0.1],
   ['grain', 0, 0.8, 0.02],
   ['warp', 0, 1.2, 0.05],
@@ -493,6 +497,7 @@ build      ${lastTimes.skinMs.toFixed(0)}ms skin · ${lastTimes.subMs.toFixed(0)
 BARK (trunk only)
 mesh       <b>${bark.validate().faces}</b> quads · ${barkStats.refineLevels} refine levels
 fissures   <b>${barkStats.brokenHoop}</b> vertical · ${barkStats.brokenAxial} cross
+plates     <b>${barkStats.plates}</b> separate scales
 ridge      <b>${barkStats.ridgeWidth.toFixed(3)}</b>${
           barkStats.underResolved
             ? ` <span class="bad">(widened from ${barkStats.ridgeRequested.toFixed(3)} — mesh limit)</span>`

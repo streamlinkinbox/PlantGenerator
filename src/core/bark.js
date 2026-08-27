@@ -44,11 +44,13 @@ export const BARK_DEFAULTS = {
   faceBudget: 1500000,   // hard cap on total faces after refinement
   autoRidge: 1,          // widen the ridges if the mesh cannot resolve them
   smoothPasses: 6,       // Laplacian passes that round the trunk before carving
-  ridgeWidth: 0.09,      // mean ridge width (world units)
+  ridgeWidth: 0.13,      // mean ridge width (world units)
   growth: 1.6,           // MAX girth increase; growth stops once the pattern
                          // has reached the requested fissure density
-  reticulation: 0.06,    // share of longitudinal stress (0 = plain vertical fissures)
-  fibreStrength: 4.5,    // extra toughness along the grain (vertical fibres)
+  reticulation: 0.3,     // share of longitudinal stress: 0 = long unbroken
+                         // fissures, higher = ridges break into scales
+  fibreStrength: 1.8,    // extra toughness along the grain (vertical fibres):
+                         // keeps plates taller than they are wide
   toughnessVar: 0.22,    // spread of the per-spring rupture threshold
   tipConcentration: 1.6, // stress concentration at a collinear crack tip
   strainLimit: 0.055,    // mean rupture strain of the outer bark
@@ -59,12 +61,18 @@ export const BARK_DEFAULTS = {
   relaxIters: 18,        // relaxation sweeps between rupture passes
   ruptureCycles: 6,      // rupture/relax cycles per growth increment
   breakRate: 0.004,      // share of springs allowed to fail per rupture pass
-  furrowDepth: 1.5,      // furrow depth as a fraction of the furrow half-width
+  furrowDepth: 1.0,      // furrow depth as a fraction of the furrow half-width
   furrowWidth: 0.27,     // furrow HALF-width as a fraction of the ridge width
   ridgeRound: 0.25,      // how rounded the ridge tops are
-  grain: 0.22,           // fine fibrous noise, fraction of furrow depth
+  grain: 0.25,           // fine fibrous noise, fraction of furrow depth
   warp: 0.35,            // organic wander of the fissures, in ridge widths
   plateShift: 0.15,      // how much of the simulated plate separation to keep
+  plateLift: 0.2,        // per-plate height variation, in furrow depths
+  plateTilt: 0.16,       // per-plate tilt across the scale, in furrow depths
+  plateDome: 0.45,       // scales are thicker in the middle than at their edges
+  plateAspect: 3.0,      // scale height / ridge width (how elongated a plate is)
+  wallPower: 2.9,        // fissure wall steepness (higher = sharper V)
+  maxSlope: 0.6,         // max displacement change per edge length (anti-fold)
   coverage: 0.5,         // fraction of the trunk height to bark (small = fast)
   minRadiusRatio: 0.42,  // bark stops where the stem is this fraction of the trunk
   barkSeed: 11,          // NOT `seed`: that one belongs to the tree
@@ -382,11 +390,13 @@ function fractureLattice2D(fr, O) {
   const excess = new Float64Array(m);
   const atCrack = new Uint8Array(n);
   let hoopBrokenCount = 0;
-  const rupture = (w) => {
+  const rupture = (w, axialOnly) => {
     let maxEx = 0;
     for (let e = 0; e < m; e++) {
       excess[e] = -1;
       if (broken[e]) continue;
+      // phase 2 cracks ACROSS the strips only; the vertical fissures are done
+      if (axialOnly && springKind[e] === 0) continue;
       const i = sa[e];
       const j = sb[e];
       const len = Math.hypot(dxWrap(px[i], px[j], w), py[j] - py[i]);
@@ -442,7 +452,7 @@ function fractureLattice2D(fr, O) {
         atCrack[sb[e]] = 1;
         count++;
         // stop the instant the pattern has the requested fissure density
-        if (hoopBrokenCount >= hoopTarget) return count;
+        if (!axialOnly && hoopBrokenCount >= hoopTarget) return count;
       }
     }
     return count;
@@ -476,6 +486,45 @@ function fractureLattice2D(fr, O) {
     density = hoopBrokenCount / Math.max(hoopTotal, 1);
     if (stop) break;
   }
+  // ---- second phase: TRANSVERSE cracking.
+  // Once the vertical fissures are there the sheet is only cut into strips.
+  // Real tessellate bark keeps cracking across those strips as the stem also
+  // extends, breaking them into scales ("ridges may crack transversally...
+  // grooves join each other and divide again irregularly" - macroscopic bark
+  // terminology). Growing lengthwise now, with the hoop growth held, is what
+  // separates the strips into discrete plates.
+  let axialBrokenCount = 0;
+  for (let e = 0; e < m; e++) if (broken[e] && springKind[e] === 1) axialBrokenCount++;
+  if (O.reticulation > 0) {
+    let axialTotal = 0;
+    for (let e = 0; e < m; e++) if (springKind[e] === 1) axialTotal++;
+    // A scale is `plateAspect` ridge widths tall, so along the stem a cross
+    // crack is needed every plateAspect*ridgeWidth: that is the fraction of the
+    // axial springs that has to part. `reticulation` scales between none and
+    // fully tessellated.
+    const frac = spacing / Math.max(O.ridgeWidth * O.plateAspect, 1e-6);
+    const axialTarget = Math.round(
+      axialTotal * Math.min(0.9, frac) * Math.min(1, O.reticulation * 2)
+    );
+    const glMax = 1 + (O.growth - 1) * 3 * O.reticulation;
+    for (let step = 1; step <= O.steps && axialBrokenCount < axialTarget; step++) {
+      const gl = 1 + (glMax - 1) * (step / O.steps);
+      for (let i = 0; i < n; i++) {
+        ax[i] = x0[i] * gr;
+        ay[i] = y0[i] * gl;
+      }
+      for (let cyc = 0; cyc < O.ruptureCycles; cyc++) {
+        relax(O.relaxIters, wCur);
+        const before = axialBrokenCount;
+        rupture(wCur, true);
+        axialBrokenCount = 0;
+        for (let e = 0; e < m; e++) if (broken[e] && springKind[e] === 1) axialBrokenCount++;
+        if (axialBrokenCount >= axialTarget) break;
+        if (axialBrokenCount === before) break;
+      }
+    }
+  }
+
   relax(O.relaxIters * 4, wCur); // settle: plates drift apart, furrows open
 
   // Bridge single-row gaps in a fissure: the crack physically runs through, the
@@ -547,18 +596,89 @@ function fractureLattice2D(fr, O) {
     });
   }
 
+  // ---- segment the sheet into PLATES.
+  // Everything still joined by unbroken springs is one piece of bark. Real
+  // fissured bark does not read as grooves cut into a smooth cylinder, it reads
+  // as discrete scales that each sit at their own height and angle, so each
+  // connected piece gets its own lift, tilt and roughness below.
+  const parent = new Int32Array(n);
+  for (let i = 0; i < n; i++) parent[i] = i;
+  const find = (a) => {
+    let r = a;
+    while (parent[r] !== r) r = parent[r];
+    while (parent[a] !== r) { const nx = parent[a]; parent[a] = r; a = nx; }
+    return r;
+  };
+  const union = (a, b) => {
+    const ra = find(a);
+    const rb = find(b);
+    if (ra !== rb) parent[ra] = rb;
+  };
+  for (let e = 0; e < m; e++) {
+    if (broken[e] || springKind[e] === 2) continue; // diagonals do not bind plates
+    union(sa[e], sb[e]);
+  }
+  const plateOf = new Int32Array(n).fill(-1);
+  let plateCount = 0;
+  const remapPlate = new Map();
+  for (let i = 0; i < n; i++) {
+    const r = find(i);
+    let id = remapPlate.get(r);
+    if (id === undefined) { id = plateCount++; remapPlate.set(r, id); }
+    plateOf[i] = id;
+  }
+  // per-plate random character
+  const plateLift = new Float64Array(plateCount);
+  const plateTiltU = new Float64Array(plateCount);
+  const plateTiltV = new Float64Array(plateCount);
+  const plateRough = new Float64Array(plateCount);
+  const plateCU = new Float64Array(plateCount);
+  const plateCV = new Float64Array(plateCount);
+  const plateN = new Int32Array(plateCount);
+  // u is periodic, so the centre of a plate straddling the seam has to be a
+  // CIRCULAR mean - a plain average lands it on the far side of the trunk and
+  // the tilt term then explodes and folds the mesh along the seam.
+  const plateCos = new Float64Array(plateCount);
+  const plateSin = new Float64Array(plateCount);
+  for (let i = 0; i < n; i++) {
+    const p = plateOf[i];
+    const a = (x0[i] / stripW) * Math.PI * 2;
+    plateCos[p] += Math.cos(a);
+    plateSin[p] += Math.sin(a);
+    plateCV[p] += y0[i];
+    plateN[p]++;
+  }
+  for (let p = 0; p < plateCount; p++) {
+    const a = Math.atan2(plateSin[p], plateCos[p]);
+    plateCU[p] = (((a / (Math.PI * 2)) * stripW) % stripW + stripW) % stripW;
+    plateCV[p] /= Math.max(plateN[p], 1);
+    plateLift[p] = rnd.sym(1);
+    plateTiltU[p] = rnd.sym(1);
+    plateTiltV[p] = rnd.sym(1);
+    plateRough[p] = 0.5 + rnd() * 0.9;
+  }
+
   return {
     rows, cols, spacing, rowR, rowY, segs, width: wRest, total: fr.total, rMean,
+    plateOf, plateCount, plateLift, plateTiltU, plateTiltV, plateRough, plateCU, plateCV,
     stats: {
       latticeNodes: n, springs: m, brokenSprings: hoopBroken + axialBroken,
       brokenHoop: hoopBroken, brokenAxial: axialBroken, bondK: ka, latticeSpacing: spacing,
       hoopCrackFrac: density, targetFrac, growthUsed: gr, growthSteps: steps,
+      plates: plateCount,
     },
   };
 }
 
 export const _fractureLattice2D = fractureLattice2D;
 export const _trunkFrames = (skel, path) => trunkFrames(skel, path);
+
+/** Nearest-cell plate lookup - bilinear would blur the plate boundaries. */
+function samplePlate(F, u, v) {
+  const r = Math.max(0, Math.min(F.rows - 1, Math.round((v / Math.max(F.total, 1e-9)) * (F.rows - 1))));
+  const c = ((Math.round((u / F.width) * F.cols - 0.5) % F.cols) + F.cols) % F.cols;
+  return F.plateOf[r * F.cols + c];
+}
 
 /**
  * Spatial index over the fissure segments in the unrolled (u, v) plane, with
@@ -716,8 +836,11 @@ export function growBark(mesh, skel, opts = {}) {
   const underResolved = O.ridgeWidth < minRidge;
   if (underResolved && O.autoRidge) O.ridgeWidth = minRidge;
   const ridgeUsed = O.ridgeWidth;
-  // the cage cross-section is a square: round it off before carving bark into it
-  smoothRegion(out, faces, O.smoothPasses ?? 6, 0.55);
+  // The cage cross-section is a square: round it off before carving bark into
+  // it. Smooth the EXPANDED set, so the stretched quads the parity rule drags
+  // in around the patch get relaxed too - left alone they stay as folded shards
+  // and show up as holes at grazing angles.
+  smoothRegion(out, expandSelection(out, faces, 2), O.smoothPasses ?? 6, 0.55);
 
   // region vertex set, and which ones sit on its boundary (for the fade)
   const verts = new Set();
@@ -742,6 +865,7 @@ export function growBark(mesh, skel, opts = {}) {
   const openRef = Math.max(O.ridgeWidth * 0.05, 1e-6);
   let maxCarve = 0;
   let carved = 0;
+  const dispOf = new Map();
   let dbgSum = 0;
   let dbgSq = 0;
   let dbgNear = 0;
@@ -782,26 +906,59 @@ export function growBark(mesh, skel, opts = {}) {
     const { d: dist, o: open } = segDistance(index, field.segs, u, v, searchR);
 
     const rLocal = Math.max(pr.rLocal, 1e-5);
-    const depth = Math.min(O.furrowDepth * halfW, rLocal * 0.16);
+    const depth = Math.min(O.furrowDepth * halfW, rLocal * 0.09);
     const openNorm = Math.min(1.5, open / openRef);
     const wCarve = halfW * (0.8 + 0.4 * openNorm);
+
+    // which scale of bark is this vertex on?
+    const pid = samplePlate(field, u, v);
+    const lift = pid >= 0 ? field.plateLift[pid] : 0;
+    const rough = pid >= 0 ? field.plateRough[pid] : 1;
 
     let disp;
     if (dist < wCarve) {
       // V-shaped fissure with flat-topped ridges ("grooves with width less than
       // the flat-topped ridges separating them" - macroscopic bark terminology)
       const t = dist / wCarve;
-      disp = -depth * Math.pow(1 - t, 1.5) * Math.min(1, 0.5 + openNorm);
+      disp = -depth * Math.pow(1 - t, O.wallPower) * Math.min(1, 0.5 + openNorm);
       carved++;
     } else {
       const t = Math.min(1, (dist - wCarve) / Math.max(wCarve * 1.5, 1e-6));
       disp = depth * O.ridgeRound * 0.35 * Math.sin(Math.PI * t);
     }
-    // fibrous grain, stretched along the stem
+
+    if (pid >= 0) {
+      // A scale is thicker in the middle and thins towards its edges, where it
+      // drops into the fissure. Everything per-plate is weighted by this dome,
+      // which also makes the plate-to-plate transition happen INSIDE the groove
+      // where it belongs: without that, two neighbouring scales at different
+      // heights meet in a step across a single quad and fold the mesh over.
+      const t = Math.min(1, dist / Math.max(O.ridgeWidth * 0.55, 1e-6));
+      const dome = t * t * (3 - 2 * t);
+
+      // each scale sits at its own height and angle
+      disp += lift * depth * O.plateLift * dome;
+      let du = u - field.plateCU[pid];
+      while (du > field.width * 0.5) du -= field.width;
+      while (du < -field.width * 0.5) du += field.width;
+      const dv = v - field.plateCV[pid];
+      const span = Math.max(O.ridgeWidth, 1e-6);
+      const tu = Math.max(-1.5, Math.min(1.5, du / span));
+      const tv = Math.max(-1.5, Math.min(1.5, dv / (span * O.plateAspect)));
+      disp += depth * O.plateTilt * dome *
+        (field.plateTiltU[pid] * tu + field.plateTiltV[pid] * tv) * 0.5;
+      disp += depth * O.plateDome * dome * (0.65 + 0.35 * lift);
+    }
+
+    // fibrous grain, stretched along the stem, varying from scale to scale
     const g =
-      valueNoise([p[0], p[1] * 0.25, p[2]], 2.4 / Math.max(O.ridgeWidth, 1e-4)) * 0.7 +
-      valueNoise([p[0], p[1] * 0.4, p[2]], 6.0 / Math.max(O.ridgeWidth, 1e-4)) * 0.3;
-    disp += g * depth * O.grain;
+      valueNoise([p[0], p[1] * 0.25, p[2]], 2.4 / Math.max(O.ridgeWidth, 1e-4)) * 0.6 +
+      valueNoise([p[0], p[1] * 0.45, p[2]], 6.5 / Math.max(O.ridgeWidth, 1e-4)) * 0.4;
+    disp += g * depth * O.grain * rough;
+
+    // never let the plate terms pile up into spikes
+    const cap = depth * 1.5;
+    disp = Math.max(-cap, Math.min(cap, disp));
 
     let fade = 1;
     if (boundary.has(vid)) fade = 0;
@@ -809,12 +966,54 @@ export function growBark(mesh, skel, opts = {}) {
     const thin = Math.min(1, Math.max(0, (rLocal / (skel.nodes[0].r * O.minRadiusRatio) - 1) * 1.6));
     disp *= fade * thin;
 
-    const nrm = normals[vid];
-    out.positions[vid] = [p[0] + nrm[0] * disp, p[1] + nrm[1] * disp, p[2] + nrm[2] * disp];
-    maxCarve = Math.max(maxCarve, Math.abs(disp));
+    dispOf.set(vid, disp);
     dbgSum += disp;
     dbgSq += disp * disp;
     if (dist < searchR * 0.999) dbgNear++;
+  }
+
+  // ---- limit the displacement gradient, then apply.
+  // Neighbouring vertices that move by more than the edge between them fold the
+  // quad over: the face ends up pointing into the trunk and you see straight
+  // through the surface. Relaxing the field against that bound keeps every
+  // fissure wall steep but never overhanging.
+  {
+    const nbr = new Map();
+    for (const fi of faces) {
+      const f = out.faces[fi];
+      for (let i = 0; i < 4; i++) {
+        const a = f[i];
+        const b = f[(i + 1) % 4];
+        if (!dispOf.has(a) || !dispOf.has(b)) continue;
+        const len = V.dist(out.positions[a], out.positions[b]);
+        if (!nbr.has(a)) nbr.set(a, []);
+        if (!nbr.has(b)) nbr.set(b, []);
+        nbr.get(a).push([b, len]);
+        nbr.get(b).push([a, len]);
+      }
+    }
+    const slope = O.maxSlope;
+    for (let pass = 0; pass < 10; pass++) {
+      let worst = 0;
+      for (const [a, list] of nbr) {
+        for (const [b, len] of list) {
+          const limit = len * slope;
+          const d = dispOf.get(a) - dispOf.get(b);
+          if (Math.abs(d) <= limit) continue;
+          worst = Math.max(worst, Math.abs(d) - limit);
+          const fix = (Math.abs(d) - limit) * 0.5 * Math.sign(d);
+          dispOf.set(a, dispOf.get(a) - fix);
+          dispOf.set(b, dispOf.get(b) + fix);
+        }
+      }
+      if (worst < 1e-5) break;
+    }
+  }
+  for (const [vid, d] of dispOf) {
+    const p = out.positions[vid];
+    const nrm = normals[vid];
+    out.positions[vid] = [p[0] + nrm[0] * d, p[1] + nrm[1] * d, p[2] + nrm[2] * d];
+    maxCarve = Math.max(maxCarve, Math.abs(d));
   }
 
   // quality inside the bark patch itself, separately from the transition band
