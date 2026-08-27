@@ -7,6 +7,7 @@ import { dirname } from 'node:path';
 import zlib from 'node:zlib';
 import { generateSkeleton } from '../src/core/skeleton.js';
 import { skinSkeleton } from '../src/core/skin.js';
+import { growBark } from '../src/core/bark.js';
 import * as V from '../src/core/vec3.js';
 
 const args = process.argv.slice(2);
@@ -23,7 +24,13 @@ const pitch = (Number(arg('--pitch', 8)) * Math.PI) / 180;
 const extra = JSON.parse(arg('--json', '{}'));
 const skel = generateSkeleton({ seed, ...extra });
 const { mesh } = skinSkeleton(skel);
-const out = subdiv > 0 ? mesh.subdivide(subdiv) : mesh;
+let out = subdiv > 0 ? mesh.subdivide(subdiv) : mesh;
+if (has('--bark')) {
+  const t = Date.now();
+  const r = growBark(out, skel, JSON.parse(arg('--barkopts', '{}')));
+  out = r.mesh;
+  console.log('bark', JSON.stringify(r.stats), 'in', Date.now() - t, 'ms');
+}
 
 // camera
 let lo = [1e9, 1e9, 1e9], hi = [-1e9, -1e9, -1e9];
@@ -38,6 +45,14 @@ if (worst >= 0) {
   camCenter = mesh.faceCenter(w.fi);
   camDist = mesh.geometryQuality().avgEdge * Number(arg('--zoom', 14));
   console.log('worst face', w.fi, 'aspect', w.aspect.toFixed(2), 'at', camCenter.map((x) => x.toFixed(2)).join(','));
+}
+if (has('--trunk')) {
+  // frame the lower trunk
+  let lo = [1e9, 1e9, 1e9];
+  for (const p of out.positions) for (let i = 0; i < 3; i++) lo[i] = Math.min(lo[i], p[i]);
+  const h = Number(arg('--th', 1.2));
+  camCenter = [skel.nodes[0].p[0], lo[1] + h, skel.nodes[0].p[2]];
+  camDist = skel.nodes[0].r * Number(arg('--zoom', 9));
 }
 const focus = Number(arg('--focus', -1));
 if (focus >= 0) {
@@ -67,6 +82,46 @@ for (let i = 0; i < W * H; i++) {
 }
 const zbuf = new Float32Array(W * H).fill(Infinity);
 const L = V.norm([0.45, 0.8, 0.5]);
+
+// per-vertex normals for Gouraud shading (flat quads at 3px look like noise)
+const VN = out.positions.map(() => [0, 0, 0]);
+for (const q of out.faces) {
+  const p = q.map((i) => out.positions[i]);
+  const n = V.cross(V.sub(p[2], p[0]), V.sub(p[3], p[1]));
+  for (const i of q) VN[i] = V.add(VN[i], n);
+}
+for (let i = 0; i < VN.length; i++) VN[i] = V.len(VN[i]) > 1e-12 ? V.norm(VN[i]) : [0, 1, 0];
+
+function shadeOf(n) {
+  const diff = Math.max(0, V.dot(n, L));
+  return 0.16 + 0.84 * diff;
+}
+
+function triS(a, b, c, na, nb, nc) {
+  const minx = Math.max(0, Math.floor(Math.min(a[0], b[0], c[0])));
+  const maxx = Math.min(W - 1, Math.ceil(Math.max(a[0], b[0], c[0])));
+  const miny = Math.max(0, Math.floor(Math.min(a[1], b[1], c[1])));
+  const maxy = Math.min(H - 1, Math.ceil(Math.max(a[1], b[1], c[1])));
+  const area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+  if (Math.abs(area) < 1e-9) return;
+  const sa = shadeOf(na);
+  const sb = shadeOf(nb);
+  const sc = shadeOf(nc);
+  for (let y = miny; y <= maxy; y++)
+    for (let x = minx; x <= maxx; x++) {
+      const px = x + 0.5, py = y + 0.5;
+      const w0 = ((b[0] - a[0]) * (py - a[1]) - (b[1] - a[1]) * (px - a[0])) / area;
+      const w1 = ((c[0] - b[0]) * (py - b[1]) - (c[1] - b[1]) * (px - b[0])) / area;
+      const w2 = 1 - w0 - w1;
+      if (w0 < 0 || w1 < 0 || w2 < 0) continue;
+      const z = w1 * a[2] + w2 * b[2] + w0 * c[2];
+      const idx = y * W + x;
+      if (z >= zbuf[idx]) continue;
+      zbuf[idx] = z;
+      const sh = w1 * sa + w2 * sb + w0 * sc;
+      color[idx * 3] = sh * 214; color[idx * 3 + 1] = sh * 178; color[idx * 3 + 2] = sh * 132;
+    }
+}
 
 function tri(a, b, c, n) {
   const minx = Math.max(0, Math.floor(Math.min(a[0], b[0], c[0])));
@@ -99,8 +154,13 @@ for (const q of out.faces) {
   if (q.some((i) => proj[i][2] <= 0.01)) continue;
   const n = V.norm(V.cross(V.sub(P[1], P[0]), V.sub(P[2], P[0])));
   if (V.dot(n, V.sub(P[0], eye)) > 0) continue; // backface
-  tri(proj[q[0]], proj[q[1]], proj[q[2]], n);
-  tri(proj[q[0]], proj[q[2]], proj[q[3]], n);
+  if (has('--flat')) {
+    tri(proj[q[0]], proj[q[1]], proj[q[2]], n);
+    tri(proj[q[0]], proj[q[2]], proj[q[3]], n);
+  } else {
+    triS(proj[q[0]], proj[q[1]], proj[q[2]], VN[q[0]], VN[q[1]], VN[q[2]]);
+    triS(proj[q[0]], proj[q[2]], proj[q[3]], VN[q[0]], VN[q[2]], VN[q[3]]);
+  }
 }
 
 if (has('--wire')) {

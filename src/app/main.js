@@ -8,6 +8,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { generateSkeleton, DEFAULTS, orderByGrowth, skeletonStats } from '../core/skeleton.js';
 import { skinSkeleton, SKIN_DEFAULTS } from '../core/skin.js';
+import { growBark, BARK_DEFAULTS } from '../core/bark.js';
 
 // ---------------------------------------------------------------- parameters
 const shapeSpec = [
@@ -49,7 +50,20 @@ const skinSpec = [
   ['hubFit', 0, 1, 0.05],
 ];
 
-const params = { ...DEFAULTS, ...SKIN_DEFAULTS, subdivisions: 1 };
+const barkSpec = [
+  ['ridgeWidth', 0.02, 0.3, 0.005],
+  ['furrowDepth', 0.3, 2.5, 0.05],
+  ['furrowWidth', 0.1, 0.5, 0.01],
+  ['growth', 1.05, 2.5, 0.05],
+  ['reticulation', 0, 0.6, 0.01],
+  ['fibreStrength', 0, 8, 0.1],
+  ['grain', 0, 0.8, 0.02],
+  ['warp', 0, 1.2, 0.05],
+  ['minRadiusRatio', 0.1, 0.9, 0.02],
+  ['barkMaxLevels', 2, 6, 1],
+];
+
+const params = { ...DEFAULTS, ...SKIN_DEFAULTS, ...BARK_DEFAULTS, subdivisions: 1 };
 const sliders = {};
 
 function buildControls(host, spec) {
@@ -61,6 +75,13 @@ function buildControls(host, spec) {
     input.type = 'range';
     input.min = min; input.max = max; input.step = step; input.value = params[key];
     const out = wrap.querySelector('b');
+    if (spec === barkSpec) {
+      input.addEventListener('input', () => { barkStale = true; });
+      wrap.appendChild(input);
+      host.appendChild(wrap);
+      sliders[key] = { input, out };
+      continue;
+    }
     const isSkinOnly = spec === skinSpec;
     input.addEventListener('input', () => {
       params[key] = parseFloat(input.value);
@@ -76,6 +97,7 @@ function buildControls(host, spec) {
 buildControls(document.getElementById('treeControls'), shapeSpec);
 buildControls(document.getElementById('woodControls'), woodSpec);
 buildControls(document.getElementById('skinControls'), skinSpec);
+buildControls(document.getElementById('barkControls'), barkSpec);
 
 // ---------------------------------------------------------------- three setup
 const view = document.getElementById('view');
@@ -130,10 +152,15 @@ let growth = null;
 let growT = 1;
 let stage = 0;
 let skinStale = true;
+let barkStale = true;
+let bark = null;
+let objBark = null;
+let barkStats = null;
 let lastTimes = { skelMs: 0, skinMs: 0, subMs: 0 };
 let previewOnly = false;
 
 const skeletonOnly = () => stage < 2;
+const BARK_STAGE = 5;
 
 const stageButtons = [...document.querySelectorAll('#stages button')];
 stageButtons.forEach((b) =>
@@ -146,6 +173,7 @@ stageButtons.forEach((b) =>
       if (previewOnly) buildSkeleton(false); // upgrade the quick preview first
       buildSkin();
     }
+    if (stage === BARK_STAGE && (barkStale || !bark)) buildBark();
     if (stage <= 1) growT = Math.min(growT, 1);
     applyStage();
   })
@@ -157,6 +185,11 @@ document.getElementById('flat').addEventListener('change', (e) => {
   matSurf.needsUpdate = true;
 });
 document.getElementById('grow').addEventListener('click', () => { growT = 0; });
+document.getElementById('growBark').addEventListener('click', () => {
+  stage = BARK_STAGE;
+  stageButtons.forEach((x) => x.classList.toggle('on', +x.dataset.stage === BARK_STAGE));
+  buildBark();
+});
 document.getElementById('reseed').addEventListener('click', () => {
   params.seed = 1 + Math.floor(Math.random() * 9999);
   sliders.seed.input.value = params.seed;
@@ -169,6 +202,10 @@ document.getElementById('exportCage').addEventListener('click', () => {
   download('cage.obj', cage.toOBJ('tree_cage'));
 });
 document.getElementById('exportSub').addEventListener('click', () => {
+  if (stage === BARK_STAGE && bark && !barkStale) {
+    download('bark.obj', bark.toOBJ('tree_bark'));
+    return;
+  }
   ensureSkin();
   download('skin.obj', fine.toOBJ('tree_skin'));
 });
@@ -319,6 +356,27 @@ function buildSkin() {
   applyStage();
 }
 
+/** Stage 6: refine the trunk locally and carve the fracture pattern into it. */
+function buildBark() {
+  ensureSkin();
+  const hud = document.getElementById('hud');
+  hud.textContent = 'growing bark — fracture simulation running…';
+  // let the HUD paint before the (synchronous) heavy work
+  requestAnimationFrame(() => {
+    const t0 = performance.now();
+    const src = Math.round(params.subdivisions) > 0 ? fine : cage;
+    const res = growBark(src, skel, { ...params, barkMaxLevels: Math.round(params.barkMaxLevels) });
+    bark = res.mesh;
+    barkStats = { ...res.stats, totalMs: performance.now() - t0 };
+    if (objBark) { objBark.geometry.dispose(); skinGroup.remove(objBark); }
+    objBark = new THREE.Mesh(meshGeometry(bark), matSurf);
+    skinGroup.add(objBark);
+    barkStale = false;
+    report();
+    applyStage();
+  });
+}
+
 function ensureSkin() {
   if (previewOnly) buildSkeleton(false);
   if (skinStale) buildSkin();
@@ -394,7 +452,19 @@ euler χ    <b>${v.euler}</b> · genus <b>${v.genus}</b>
 no twist   ${flag(skinned.backwardSockets === 0)}
 no pinch   ${flag(q.pinched === 0)} · max aspect <b>${q.maxAspect.toFixed(1)}</b>:1
 poles      <b>${poles}</b> / ${v.vertices} non-4-valence
-build      ${lastTimes.skinMs.toFixed(0)}ms skin · ${lastTimes.subMs.toFixed(0)}ms subdiv`;
+build      ${lastTimes.skinMs.toFixed(0)}ms skin · ${lastTimes.subMs.toFixed(0)}ms subdiv${
+    stage === BARK_STAGE && bark && barkStats
+      ? `
+
+BARK (trunk only)
+mesh       <b>${bark.validate().faces}</b> quads · ${barkStats.refineLevels} refine levels
+fissures   <b>${barkStats.brokenHoop}</b> vertical · ${barkStats.brokenAxial} cross
+lattice    ${barkStats.latticeNodes} nodes · growth ×${barkStats.growthUsed.toFixed(2)}
+carved     <b>${barkStats.carvedVerts}</b> verts · max ${(barkStats.maxCarve * 1000).toFixed(1)}mm
+watertight ${flag(bark.validate().watertight)} · shells ${bark.validate().shells}
+time       ${barkStats.totalMs.toFixed(0)} ms`
+      : ''
+  }`;
 }
 
 function applyStage() {
@@ -403,6 +473,7 @@ function applyStage() {
   if (!objPoints) return;
 
   const skinReady = !skinStale && objCage;
+  if (objBark) objBark.visible = stage === BARK_STAGE && !barkStale;
   objPoints.visible = stage <= 1 || keepSkel;
   if (skinReady) {
     objHubs.visible = stage === 2;
@@ -410,6 +481,12 @@ function applyStage() {
     objCageWire.visible = (stage === 2 || stage === 3) && wire;
     objSkin.visible = stage === 4;
     objSkinWire.visible = stage === 4 && wire;
+    if (stage === BARK_STAGE) {
+      objCage.visible = false;
+      objCageWire.visible = false;
+      objSkin.visible = !objBark;
+      objSkinWire.visible = false;
+    }
   }
   objBones.visible = stage <= 1 || keepSkel;
   matBones.opacity = stage === 0 ? 0.35 : 0.9;
@@ -419,7 +496,8 @@ function applyStage() {
      'bones — the vertices connected into limbs',
      'hub boxes — a box fitted at every fork',
      'quad cage — boxes extruded + tubes stitched (1 shell)',
-     'skin — Catmull-Clark of that same all-quad cage'][stage] +
+     'skin — Catmull-Clark of that same all-quad cage',
+     'bark — trunk refined locally, growth-fracture pattern carved in'][stage] +
     '\ndrag to orbit · scroll to zoom';
 }
 
