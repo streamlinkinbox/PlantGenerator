@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>PlantGenerator — quad-topology tree skinner</title>
-    <link rel="stylesheet" href="/src/app/style.css?v=150325" />
+    <link rel="stylesheet" href="/src/app/style.css" />
   </head>
   <body>
     <div id="view"></div>
@@ -13,7 +13,7 @@
       <header>
         <h1>Plant<span>Generator</span></h1>
         <p class="sub">skeleton vertices → box hubs → single all-quad skin</p>
-        <p class="sub build">build <b id="build">15:03:25</b> — if this is not the newest build, hard-reload (Ctrl+Shift+R)</p>
+        <p class="sub build">build <b id="build">15:21:33</b> — if this is not the newest build, hard-reload (Ctrl+Shift+R)</p>
       </header>
 
       <section>
@@ -70,6 +70,29 @@
     </aside>
 
     <div id="hud"></div>
-    <script type="module" src="/src/app/main.js?v=150325"></script>
+    <script>
+      // Classic script - runs even if the module graph fails to load. Its job is
+      // to make a silent module failure visible instead of leaving a blank panel.
+      window.__PG_ERRORS = [];
+      addEventListener('error', function (e) {
+        var url = (e.target && (e.target.src || e.target.href)) || '';
+        window.__PG_ERRORS.push(url ? 'failed to load: ' + url : (e.message || 'error'));
+      }, true);
+      addEventListener('unhandledrejection', function (e) {
+        window.__PG_ERRORS.push('promise: ' + (e.reason && e.reason.message ? e.reason.message : e.reason));
+      });
+      setTimeout(function () {
+        if (window.__PG_READY) return;
+        var stage = window.__PG_MODULE ? 'the module loaded but init failed' : 'the module never executed';
+        var box = document.getElementById('stats');
+        var msg = '<span class="bad">APP DID NOT START</span>\n' + stage +
+          '\nexpected build 15:21:33\n' +
+          (window.__PG_ERRORS.length ? '\n' + window.__PG_ERRORS.slice(0, 6).join('\n') : '\nno resource errors captured');
+        if (box) box.innerHTML = msg;
+        var hud = document.getElementById('hud');
+        if (hud) hud.textContent = 'APP DID NOT START — see the topology audit box';
+      }, 5000);
+    </script>
+    <script type="module" src="/src/app/main.js?v=152133"></script>
   </body>
 </html>

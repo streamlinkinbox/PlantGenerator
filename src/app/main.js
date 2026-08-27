@@ -4,12 +4,16 @@ addEventListener('error', (e) => {
   if (hud) hud.textContent = `error: ${e.message}`;
 });
 
-const BUILD = '15:03:25';
+const BUILD = '15:21:33';
 console.log('%cPlantGenerator build ' + BUILD, 'color:#38e2a8;font-weight:bold');
-addEventListener('DOMContentLoaded', () => {
+// the watchdog in index.html checks these two flags
+window.__PG_MODULE = BUILD;
+const stampEl = () => {
   const el = document.getElementById('build');
   if (el) el.textContent = BUILD;
-});
+};
+addEventListener('DOMContentLoaded', stampEl);
+stampEl();
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -84,7 +88,12 @@ function buildControls(host, spec) {
     input.min = min; input.max = max; input.step = step; input.value = params[key];
     const out = wrap.querySelector('b');
     if (spec === barkSpec) {
-      input.addEventListener('input', () => { barkStale = true; });
+      // bark params only mark the bark stale; they must still be written
+      input.addEventListener('input', () => {
+        params[key] = parseFloat(input.value);
+        out.textContent = params[key];
+        barkStale = true;
+      });
       wrap.appendChild(input);
       host.appendChild(wrap);
       sliders[key] = { input, out };
@@ -558,7 +567,15 @@ addEventListener('resize', () => {
 });
 
 growT = 0;
-// only the skeleton is built up front: the box/skin chain is lazy, it runs the
-// first time you actually look at stage 3/4/5 (or export)
-buildSkeleton(false);
-tick();
+try {
+  // only the skeleton is built up front: the box/skin chain is lazy, it runs the
+  // first time you actually look at stage 3/4/5 (or export)
+  buildSkeleton(false);
+  tick();
+  window.__PG_READY = BUILD;
+  console.log('%cPlantGenerator ready', 'color:#38e2a8');
+} catch (err) {
+  console.error(err);
+  const box = document.getElementById('stats');
+  if (box) box.innerHTML = `<span class="bad">INIT FAILED</span>\n${err.message}\n\n${(err.stack || '').split('\n').slice(1, 5).join('\n')}`;
+}
